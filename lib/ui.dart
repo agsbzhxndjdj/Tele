@@ -298,19 +298,13 @@ class _HomePageState extends State<HomePage> {
                     ])),
               // ✅ إصلاح رئيسي: استخدام CustomScrollView مع Slivers بدلاً من shrinkWrap
               Expanded(child: CustomScrollView(
-  controller: _scroll,
-  slivers: [
-                  // البانر
+                controller: _scroll,
+                slivers: [
                   if (today != null) SliverToBoxAdapter(child: _banner(today)),
-                  // متابعة المشاهدة
                   if (cont.isNotEmpty) SliverToBoxAdapter(child: _row(Lang.t('continueWatching'), cont)),
-                  // الأكثر مشاهدة
                   if (_popular.isNotEmpty) SliverToBoxAdapter(child: _row(Lang.t('mostWatched'), _popular)),
-                  // التوصيات
                   if (_reco.isNotEmpty) SliverToBoxAdapter(child: _row(Lang.t('recommended'), _reco)),
-                  // الشرائح
                   SliverToBoxAdapter(child: _chips(genres.toList())),
-                  // ✅ الشبكة مع Lazy Loading حقيقي
                   if (movies.isEmpty)
                     SliverToBoxAdapter(child: SizedBox(height: 200, child: Center(child: Text(Lang.t('noMovies'), style: const TextStyle(color: Colors.grey)))))
                   else if (listView)
