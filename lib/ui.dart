@@ -298,8 +298,8 @@ class _HomePageState extends State<HomePage> {
                     ])),
               // ✅ إصلاح رئيسي: استخدام CustomScrollView مع Slivers بدلاً من shrinkWrap
               Expanded(child: CustomScrollView(
-                controller: _scroll,
-                slivers: [
+  controller: _scroll,
+  slivers: [
                   // البانر
                   if (today != null) SliverToBoxAdapter(child: _banner(today)),
                   // متابعة المشاهدة
