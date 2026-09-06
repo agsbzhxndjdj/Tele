@@ -7,6 +7,8 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:video_player/video_player.dart';
 import 'package:volume_controller/volume_controller.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
+import 'package:media_kit/media_kit.dart';
+import 'package:media_kit_video/media_kit_video.dart';
 import 'core.dart';
 import 'power.dart';
 import 'lang.dart';
@@ -1005,7 +1007,7 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
   }
 }
 
-/* ======== المشغل الاحترافي ======== */
+/* ======== المشغل الاحترافي (media_kit) ======== */
 class PlayerScreen extends StatefulWidget {
   final String title;
   final String? url;
@@ -1018,7 +1020,8 @@ class PlayerScreen extends StatefulWidget {
 }
 
 class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver {
-  VideoPlayerController? _c;
+  late final Player _player;
+  late final VideoController _controller;
   bool _ready = false, _err = false, _ui = true;
   bool _locked = false, _audioOnly = false, _ended = false;
   Timer? _hide, _posSaver, _sleep;
@@ -1028,7 +1031,11 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
   String _glabel = '';
   double _vol = 1.0, _bright = 1.0;
   int _seekBase = 0, _seekDelta = 0;
-  String? _autoUrl;
+  Duration _duration = Duration.zero;
+  Duration _position = Duration.zero;
+  bool _playing = false;
+  bool _buffering = false;
+  StreamSubscription? _posSub, _durSub, _playSub, _bufSub, _completedSub;
 
   @override
   void initState() {
@@ -1042,14 +1049,83 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
     VolumeController().listener((v) {
       if (mounted) setState(() => _vol = v);
     });
-    _initSmart();
+    _initPlayer();
     _poke();
     _posSaver = Timer.periodic(const Duration(seconds: 5), (_) => _savePosition());
   }
 
-  Future _initSmart() async {
-    // ✅ التعديل 1: ابدأ التشغيل فوراً بدون انتظار SpeedPick
-    _init();
+  Future<void> _initPlayer() async {
+    try {
+      // ✅ إعدادات media_kit للأداء الفائق
+      _player = Player(
+        configuration: PlayerConfiguration(
+          bufferSize: 32 * 1024 * 1024, // 32MB buffer - سريع جداً
+          vo: 'gpu',
+        ),
+      );
+      _controller = VideoController(_player);
+
+      // استماع للأحداث
+      _posSub = _player.stream.position.listen((p) {
+        if (!mounted) return;
+        if (_position != p) {
+          setState(() {
+            _position = p;
+            if (p.inSeconds != _lastPos) {
+              _lastPos = p.inSeconds;
+              Store.addWatchSeconds(1);
+            }
+          });
+        }
+      });
+
+      _durSub = _player.stream.duration.listen((d) {
+        if (!mounted) return;
+        if (_duration != d) setState(() => _duration = d);
+      });
+
+      _playSub = _player.stream.playing.listen((p) {
+        if (!mounted) return;
+        setState(() => _playing = p);
+      });
+
+      _bufSub = _player.stream.buffering.listen((b) {
+        if (!mounted) return;
+        setState(() => _buffering = b);
+      });
+
+      _completedSub = _player.stream.completed.listen((c) {
+        if (!mounted) return;
+        if (c && !_ended) {
+          _ended = true;
+          _player.pause();
+          _onEnd();
+        }
+      });
+
+      final videoUrl = widget.filePath ?? 
+          ((Store.getBool('dataSaver') && widget.movie != null && widget.movie!.alts.isNotEmpty)
+              ? (widget.movie!.alts.last['url'] ?? widget.url!)
+              : (widget.url!));
+
+      await _player.open(Media(videoUrl), play: true);
+      
+      // استعادة الموضع المحفوظ
+      if (widget.movie != null) {
+        final savedPos = Store.getPosition(widget.movie!.id);
+        if (savedPos > 0) {
+          await _player.seek(Duration(seconds: savedPos));
+        }
+      }
+
+      if (!mounted) return;
+      setState(() => _ready = true);
+      
+      final sv = await VolumeController().getVolume();
+      if (mounted && sv != null) setState(() => _vol = sv);
+    } catch (e) {
+      if (mounted) setState(() => _err = true);
+    }
   }
 
   void _onEnd() {
@@ -1065,77 +1141,22 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
       _savePosition();
-      _c?.pause();
+      _player.pause();
     } else if (state == AppLifecycleState.resumed) {
-      final c = _c;
-      if (c != null && c.value.isInitialized && !_audioOnly) {
-        c.play();
+      if (!_audioOnly) {
+        _player.play();
         _poke();
       }
     }
   }
 
   Future _savePosition() async {
-    final c = _c;
-    if (c != null && c.value.isInitialized && widget.movie != null) {
-      final pos = c.value.position.inSeconds;
-      final dur = c.value.duration.inSeconds;
-      if (pos > 10 && pos < dur - 10) await Store.savePosition(widget.movie!.id, pos);
-    }
-  }
-
-  Future _init() async {
-    try {
-      final videoUrl = (Store.getBool('dataSaver') && widget.movie != null && widget.movie!.alts.isNotEmpty)
-          ? (widget.movie!.alts.last['url'] ?? (_autoUrl ?? widget.url!))
-          : (_autoUrl ?? widget.url!);
-      
-      // ✅ التعديل 2: إضافة VideoPlayerOptions لتحسين الأداء
-      final c = widget.filePath != null
-          ? VideoPlayerController.file(File(widget.filePath!))
-          : VideoPlayerController.networkUrl(
-              Uri.parse(videoUrl),
-              videoPlayerOptions: VideoPlayerOptions(
-                mixWithOthers: false,
-                allowBackgroundPlayback: false,
-              ),
-              httpHeaders: const {'Range': 'bytes=0-'},
-              formatHint: null,
-            );
-      
-      c.addListener(() {
-        if (!mounted) return;
-        setState(() {});
-        final p = c.value.position.inSeconds;
-        if (p != _lastPos) {
-          _lastPos = p;
-          Store.addWatchSeconds(1);
-        }
-        if (c.value.isInitialized && c.value.duration.inSeconds > 0 && c.value.position.inSeconds >= c.value.duration.inSeconds - 2 && !_ended) {
-          _ended = true;
-          c.pause();
-          _onEnd();
-        }
-      });
-      await c.initialize();
-      if (widget.movie != null) {
-        final savedPos = Store.getPosition(widget.movie!.id);
-        if (savedPos > 0) await c.seekTo(Duration(seconds: savedPos));
+    if (widget.movie != null && _position.inSeconds > 10) {
+      final dur = _duration.inSeconds;
+      final pos = _position.inSeconds;
+      if (dur > 0 && pos < dur - 10) {
+        await Store.savePosition(widget.movie!.id, pos);
       }
-      if (!mounted) {
-        c.dispose();
-        return;
-      }
-      setState(() {
-        _c = c;
-        _ready = true;
-      });
-      c.setVolume(1);
-      final sv = await VolumeController().getVolume();
-      if (mounted && sv != null) setState(() => _vol = sv);
-      c.play();
-    } catch (_) {
-      if (mounted) setState(() => _err = true);
     }
   }
 
@@ -1171,11 +1192,9 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
   }
 
   void _jump(int sec) {
-    final c = _c;
-    if (c == null || !c.value.isInitialized) return;
-    final t = c.value.duration.inSeconds;
-    final s = (c.value.position.inSeconds + sec).clamp(0, t);
-    c.seekTo(Duration(seconds: s));
+    final t = _duration.inSeconds;
+    final s = (_position.inSeconds + sec).clamp(0, t);
+    _player.seek(Duration(seconds: s));
     setState(() {
       _gmode = 1;
       _glabel = '${sec > 0 ? '+' : ''}$sec';
@@ -1194,8 +1213,8 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
           ...[0.5, 0.75, 1.0, 1.25, 1.5, 2.0].map(
             (s) => ListTile(
               title: Text('${s}x', textAlign: TextAlign.center),
-              onTap: () {
-                _c?.setPlaybackSpeed(s);
+              onTap: () async {
+                await _player.setRate(s);
                 Navigator.pop(context);
               },
             ),
@@ -1216,7 +1235,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
               title: Text(mn == 0 ? Lang.t('off') : '$mn min', textAlign: TextAlign.center),
               onTap: () {
                 _sleep?.cancel();
-                if (mn > 0) _sleep = Timer(Duration(minutes: mn), () => _c?.pause());
+                if (mn > 0) _sleep = Timer(Duration(minutes: mn), () => _player.pause());
                 Navigator.pop(context);
               },
             ),
@@ -1238,9 +1257,9 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
           ...opts.map(
             (a) => ListTile(
               title: Text('${a['q']}${a['url'] == m.videoUrl ? '  ✔' : ''}', textAlign: TextAlign.center),
-              onTap: () {
+              onTap: () async {
                 Navigator.pop(context);
-                if (a['url'] != m.videoUrl) _switchUrl(a['url']!);
+                if (a['url'] != m.videoUrl) await _switchUrl(a['url']!);
               },
             ),
           ),
@@ -1250,54 +1269,22 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
   }
 
   Future _switchUrl(String url) async {
-    final old = _c;
-    final pos = (old != null && old.value.isInitialized) ? old.value.position : Duration.zero;
-    old?.pause();
+    final pos = _position;
+    _player.pause();
     setState(() {
       _ready = false;
       _ended = false;
     });
     try {
-      // ✅ التعديل 3: إضافة VideoPlayerOptions لتحسين الأداء
-      final c = VideoPlayerController.networkUrl(
-        Uri.parse(url),
-        videoPlayerOptions: VideoPlayerOptions(
-          mixWithOthers: false,
-          allowBackgroundPlayback: false,
-        ),
-        httpHeaders: const {'Range': 'bytes=0-'},
-        formatHint: null,
-      );
-      
-      c.addListener(() {
-        if (!mounted) return;
-        setState(() {});
-        final p = c.value.position.inSeconds;
-        if (p != _lastPos) {
-          _lastPos = p;
-          Store.addWatchSeconds(1);
-        }
-        if (c.value.isInitialized && c.value.duration.inSeconds > 0 && c.value.position.inSeconds >= c.value.duration.inSeconds - 2 && !_ended) {
-          _ended = true;
-          c.pause();
-          _onEnd();
-        }
-      });
-      await c.initialize();
-      if (pos.inSeconds > 0) await c.seekTo(pos);
-      old?.dispose();
+      await _player.open(Media(url), play: true);
+      if (pos.inSeconds > 0) await _player.seek(pos);
       if (!mounted) return;
-      setState(() {
-        _c = c;
-        _ready = true;
-      });
+      setState(() => _ready = true);
       widget.movie?.applyQuality(url);
-      c.setVolume(1);
-      c.play();
       _poke();
     } catch (_) {
       if (mounted) setState(() => _ready = true);
-      old?.play();
+      _player.play();
     }
   }
 
@@ -1323,7 +1310,12 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
     WakelockPlus.disable();
     WidgetsBinding.instance.removeObserver(this);
     _hide?.cancel();
-    _c?.dispose();
+    _posSub?.cancel();
+    _durSub?.cancel();
+    _playSub?.cancel();
+    _bufSub?.cancel();
+    _completedSub?.cancel();
+    _player.dispose();
     SystemChrome.setPreferredOrientations(DeviceOrientation.values);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     super.dispose();
@@ -1331,15 +1323,18 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
 
   @override
   Widget build(BuildContext context) {
-    final c = _c;
-    final dur = c != null && c.value.isInitialized ? c.value.duration : Duration.zero;
-    final pos = c != null && c.value.isInitialized ? c.value.position : Duration.zero;
+    final dur = _duration;
+    final pos = _position;
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
         fit: StackFit.expand,
         children: [
-          if (c != null && _ready && !_audioOnly) Center(child: AspectRatio(aspectRatio: c.value.aspectRatio, child: VideoPlayer(c))),
+          if (_ready && !_audioOnly)
+            Video(
+              controller: _controller,
+              controls: NoVideoControls,
+            ),
           if (_audioOnly) const Center(child: Icon(Icons.music_note, size: 80, color: Colors.white24)),
           IgnorePointer(child: Container(color: Colors.black.withOpacity((1 - _bright) * 0.85))),
           GestureDetector(
@@ -1375,7 +1370,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
             onHorizontalDragEnd: (_) {
               if (_locked) return;
               final s = (_seekBase + _seekDelta).clamp(0, dur.inSeconds);
-              c?.seekTo(Duration(seconds: s));
+              _player.seek(Duration(seconds: s));
               setState(() => _gmode = 0);
             },
             onVerticalDragStart: (d) {
@@ -1432,7 +1427,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
                 }),
               ),
             ),
-          if (_ready && c != null && c.value.isBuffering) const Center(child: CircularProgressIndicator(color: Colors.amber)),
+          if (_ready && _buffering) const Center(child: CircularProgressIndicator(color: Colors.amber)),
           if (_err) Center(child: Text(Lang.t('failedPlay'), style: const TextStyle(color: Colors.grey))),
           if (!_ready && !_err) const Center(child: CircularProgressIndicator(color: Colors.amber)),
           if (_ui)
@@ -1488,7 +1483,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
                 ),
               ),
             ),
-          if (_ui && _ready && c != null)
+          if (_ui && _ready)
             Positioned(
               bottom: 0,
               left: 0,
@@ -1506,9 +1501,9 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
                         children: [
                           IconButton(icon: const Icon(Icons.replay_10, color: Colors.white70), onPressed: () => _jump(-10)),
                           IconButton(
-                            icon: Icon(c.value.isPlaying ? Icons.pause : Icons.play_arrow, color: AppTheme.accent, size: 44),
+                            icon: Icon(_playing ? Icons.pause : Icons.play_arrow, color: AppTheme.accent, size: 44),
                             onPressed: () {
-                              c.value.isPlaying ? c.pause() : c.play();
+                              _playing ? _player.pause() : _player.play();
                               _poke();
                             },
                           ),
@@ -1533,7 +1528,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
                                 child: Slider(
                                   value: pos.inSeconds.toDouble().clamp(0, dur.inSeconds.toDouble()),
                                   max: dur.inSeconds.toDouble().clamp(1, 100000000),
-                                  onChanged: (v) => c.seekTo(Duration(seconds: v.toInt())),
+                                  onChanged: (v) => _player.seek(Duration(seconds: v.toInt())),
                                 ),
                               ),
                             ),
