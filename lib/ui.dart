@@ -1217,16 +1217,7 @@ Future<void> _initPlayer() async {
     // ... باقي الكود كما هو (stream listeners)
     
     // ✅ مع User-Agent و Range headers
-    await _player.open(
-      Media(
-        videoUrl,
-        httpHeaders: {
-          'User-Agent': 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36',
-          'Range': 'bytes=0-',
-        },
-      ),
-      play: true,
-    );
+    await _player.open(Media(videoUrl), play: true);
       
       // استعادة الموضع المحفوظ
       if (widget.movie != null) {
