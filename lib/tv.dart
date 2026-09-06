@@ -3,8 +3,9 @@ import 'dart:io';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:video_player/video_player.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
+import 'package:media_kit/media_kit.dart';
+import 'package:media_kit_video/media_kit_video.dart';
 import 'core.dart';
 import 'power.dart';
 import 'lang.dart';
@@ -699,7 +700,7 @@ class _TvDetailsState extends State<TvDetails> {
       );
 }
 
-/* ======== مشغل الفيديو ======== */
+/* ======== مشغل الفيديو (media_kit) ======== */
 class TvPlayer extends StatefulWidget {
   final Movie movie;
   final String? localPath;
@@ -711,14 +712,19 @@ class TvPlayer extends StatefulWidget {
 }
 
 class _TvPlayerState extends State<TvPlayer> {
-  VideoPlayerController? _c;
+  late final Player _player;
+  late final VideoController _controller;
   bool _ready = false, _err = false, _ui = true;
   Timer? _hide, _saver, _amb;
   String _currentQuality = '';
   String _currentUrl = '';
-  String? _autoUrl;
   bool _ended = false, _ambient = false;
   DateTime? _pausedAt;
+  Duration _duration = Duration.zero;
+  Duration _position = Duration.zero;
+  bool _playing = false;
+  bool _buffering = false;
+  StreamSubscription? _posSub, _durSub, _playSub, _bufSub, _completedSub;
 
   @override
   void initState() {
@@ -730,68 +736,79 @@ class _TvPlayerState extends State<TvPlayer> {
     _saver = Timer.periodic(const Duration(seconds: 5), (_) => _save());
     /* ✅ حماية الشاشة: بعد 3 دقائق إيقاف */
     _amb = Timer.periodic(const Duration(seconds: 20), (_) {
-      final c = _c;
-      if (c != null && c.value.isInitialized && !c.value.isPlaying) {
+      if (!_playing) {
         _pausedAt ??= DateTime.now();
         if (DateTime.now().difference(_pausedAt!) > const Duration(minutes: 3) && !_ambient && mounted) setState(() => _ambient = true);
       } else {
         _pausedAt = null;
       }
     });
-    _initSmart();
+    _initPlayer();
     _poke();
   }
 
-  // ✅ التعديل 1: ابدأ التشغيل فوراً بدون انتظار SpeedPick
-  Future _initSmart() async {
-    _init();
-  }
-
-  Future _save() async {
-    final c = _c;
-    if (c != null && c.value.isInitialized) {
-      final pos = c.value.position.inSeconds, dur = c.value.duration.inSeconds;
-      if (pos > 10 && pos < dur - 10) await Store.savePosition(widget.movie.id, pos);
-    }
-  }
-
-  Future _init({String? url}) async {
+  Future<void> _initPlayer() async {
     try {
-      // ✅ التعديل 2: إضافة VideoPlayerOptions لتحسين الأداء
-      final c = widget.localPath != null
-          ? VideoPlayerController.file(File(widget.localPath!))
-          : VideoPlayerController.networkUrl(
-              Uri.parse(url ?? (_autoUrl ?? _currentUrl)),
-              videoPlayerOptions: VideoPlayerOptions(
-                mixWithOthers: false,
-                allowBackgroundPlayback: false,
-              ),
-            );
-      await c.initialize();
-      final saved = Store.getPosition(widget.movie.id);
-      if (saved > 0) await c.seekTo(Duration(seconds: saved));
-      if (!mounted) {
-        c.dispose();
-        return;
-      }
-      c.addListener(() {
-        if (mounted) setState(() {});
-        /* ✅ عند الانتهاء: الجزء التالي تلقائياً */
-        if (c.value.isInitialized && c.value.duration.inSeconds > 0 &&
-            c.value.position.inSeconds >= c.value.duration.inSeconds - 2 && !_ended) {
+      _player = Player(
+        configuration: PlayerConfiguration(
+          bufferSize: 32 * 1024 * 1024,
+          vo: 'gpu',
+        ),
+      );
+      _controller = VideoController(_player);
+
+      _posSub = _player.stream.position.listen((p) {
+        if (!mounted) return;
+        if (_position != p) {
+          setState(() => _position = p);
+        }
+      });
+
+      _durSub = _player.stream.duration.listen((d) {
+        if (!mounted) return;
+        if (_duration != d) setState(() => _duration = d);
+      });
+
+      _playSub = _player.stream.playing.listen((p) {
+        if (!mounted) return;
+        setState(() => _playing = p);
+      });
+
+      _bufSub = _player.stream.buffering.listen((b) {
+        if (!mounted) return;
+        setState(() => _buffering = b);
+      });
+
+      _completedSub = _player.stream.completed.listen((c) {
+        if (!mounted) return;
+        if (c && !_ended) {
           _ended = true;
-          c.pause();
+          _player.pause();
           final np = NextPart.of(widget.movie);
           if (np != null && mounted) NextPart.dialog(context, np, (m) => TvPlayer(movie: m));
         }
       });
-      setState(() {
-        _c = c;
-        _ready = true;
-      });
-      c.play();
+
+      final videoUrl = widget.localPath ?? _currentUrl;
+      await _player.open(Media(videoUrl), play: true);
+
+      final saved = Store.getPosition(widget.movie.id);
+      if (saved > 0) await _player.seek(Duration(seconds: saved));
+
+      if (!mounted) return;
+      setState(() => _ready = true);
     } catch (_) {
       if (mounted) setState(() => _err = true);
+    }
+  }
+
+  Future _save() async {
+    if (_position.inSeconds > 10) {
+      final dur = _duration.inSeconds;
+      final pos = _position.inSeconds;
+      if (dur > 0 && pos < dur - 10) {
+        await Store.savePosition(widget.movie.id, pos);
+      }
     }
   }
 
@@ -803,17 +820,9 @@ class _TvPlayerState extends State<TvPlayer> {
   }
 
   void _seek(int s) {
-    final c = _c;
-    if (c == null || !c.value.isInitialized) return;
-    final t = c.value.duration.inSeconds;
-    c.seekTo(Duration(seconds: (c.value.position.inSeconds + s).clamp(0, t)));
-    _poke();
-  }
-
-  void _vol(double d) {
-    final c = _c;
-    if (c == null) return;
-    c.setVolume((c.value.volume + d).clamp(0.0, 1.0));
+    final t = _duration.inSeconds;
+    final newPos = (_position.inSeconds + s).clamp(0, t);
+    _player.seek(Duration(seconds: newPos));
     _poke();
   }
 
@@ -821,18 +830,13 @@ class _TvPlayerState extends State<TvPlayer> {
     if (e is! RawKeyDownEvent) return KeyEventResult.handled;
     final k = e.logicalKey;
     if (k == LogicalKeyboardKey.goBack) return KeyEventResult.ignored;
-    final c = _c;
     if (k == LogicalKeyboardKey.select || k == LogicalKeyboardKey.enter || k == LogicalKeyboardKey.space || k == LogicalKeyboardKey.mediaPlayPause) {
-      if (c != null && c.value.isInitialized) {
-        c.value.isPlaying ? c.pause() : c.play();
-        _poke();
-      }
+      _playing ? _player.pause() : _player.play();
+      _poke();
       return KeyEventResult.handled;
     }
     if (k == LogicalKeyboardKey.arrowRight) { _seek(10); return KeyEventResult.handled; }
     if (k == LogicalKeyboardKey.arrowLeft) { _seek(-10); return KeyEventResult.handled; }
-    if (k == LogicalKeyboardKey.arrowUp) { _vol(0.1); return KeyEventResult.handled; }
-    if (k == LogicalKeyboardKey.arrowDown) { _vol(-0.1); return KeyEventResult.handled; }
     if ((k == LogicalKeyboardKey.keyM || k == LogicalKeyboardKey.contextMenu) && widget.movie.alts.isNotEmpty && widget.localPath == null) {
       _showQualitySelector();
       return KeyEventResult.handled;
@@ -875,9 +879,8 @@ class _TvPlayerState extends State<TvPlayer> {
 
   Future<void> _switchQuality(String newUrl, String newQuality) async {
     if (newUrl == _currentUrl) return;
-    final oldPos = _c?.value.position ?? Duration.zero;
-    await _c?.pause();
-    _c?.dispose();
+    final oldPos = _position;
+    _player.pause();
     setState(() {
       _ready = false;
       _err = false;
@@ -885,10 +888,16 @@ class _TvPlayerState extends State<TvPlayer> {
       _currentQuality = newQuality;
     });
     if (oldPos.inSeconds > 10) await Store.savePosition(widget.movie.id, oldPos.inSeconds);
-    await _init(url: newUrl);
-    final c = _c;
-    if (c != null && c.value.isInitialized && oldPos.inSeconds > 0) await c.seekTo(oldPos);
-    _poke();
+    try {
+      await _player.open(Media(newUrl), play: true);
+      if (oldPos.inSeconds > 0) await _player.seek(oldPos);
+      if (!mounted) return;
+      setState(() => _ready = true);
+      _poke();
+    } catch (_) {
+      if (mounted) setState(() => _ready = true);
+      _player.play();
+    }
   }
 
   @override
@@ -898,26 +907,35 @@ class _TvPlayerState extends State<TvPlayer> {
     _amb?.cancel();
     _hide?.cancel();
     WakelockPlus.disable();
-    _c?.dispose();
+    _posSub?.cancel();
+    _durSub?.cancel();
+    _playSub?.cancel();
+    _bufSub?.cancel();
+    _completedSub?.cancel();
+    _player.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final c = _c;
-    final dur = c != null && c.value.isInitialized ? c.value.duration : Duration.zero;
-    final pos = c != null && c.value.isInitialized ? c.value.position : Duration.zero;
+    final dur = _duration;
+    final pos = _position;
     return Scaffold(
         backgroundColor: Colors.black,
         body: Focus(
             autofocus: true,
             onKey: _onKey,
             child: Stack(fit: StackFit.expand, children: [
-              if (c != null && _ready) Center(child: AspectRatio(aspectRatio: c.value.aspectRatio, child: VideoPlayer(c))),
+              if (_ready)
+                Video(
+                  controller: _controller,
+                  controls: NoVideoControls,
+                ),
               /* ✅ حماية الشاشة (ساعة باهتة عند الإيقاف الطويل) */
               if (_ambient) AmbientClock(onTap: () => setState(() { _ambient = false; _pausedAt = null; })),
               if (_err) Center(child: Text(Lang.t('failedPlay'), style: const TextStyle(color: Colors.grey, fontSize: 18))),
               if (!_ready && !_err) const Center(child: CircularProgressIndicator(color: Colors.amber)),
+              if (_ready && _buffering) const Center(child: CircularProgressIndicator(color: Colors.amber)),
               if (_ui)
                 Positioned(
                     top: 0, left: 0, right: 0,
@@ -931,7 +949,7 @@ class _TvPlayerState extends State<TvPlayer> {
                             Text(widget.movie.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                             if (_currentQuality.isNotEmpty) Text(_currentQuality, style: TextStyle(fontSize: 13, color: AppTheme.accent, fontWeight: FontWeight.w500)),
                           ])),
-                          if (c != null && c.value.isInitialized) Padding(padding: const EdgeInsets.only(right: 8), child: Icon(c.value.isPlaying ? Icons.play_arrow : Icons.pause, color: AppTheme.accent, size: 28)),
+                          if (_ready) Padding(padding: const EdgeInsets.only(right: 8), child: Icon(_playing ? Icons.play_arrow : Icons.pause, color: AppTheme.accent, size: 28)),
                           if (widget.movie.alts.isNotEmpty && widget.localPath == null) IconButton(icon: Icon(Icons.settings, color: AppTheme.accent, size: 28), onPressed: _showQualitySelector, tooltip: 'تغيير الجودة'),
                         ]))),
               if (_ui)
@@ -950,8 +968,8 @@ class _TvPlayerState extends State<TvPlayer> {
                           const SizedBox(height: 10),
                           Text(
                               widget.localPath != null
-                                  ? 'OK تشغيل/إيقاف • يمين/يسار تقديم • أعلى/أسفل الصوت'
-                                  : 'OK تشغيل/إيقاف • يمين/يسار تقديم • أعلى/أسفل الصوت • M تغيير الجودة',
+                                  ? 'OK تشغيل/إيقاف • يمين/يسار تقديم'
+                                  : 'OK تشغيل/إيقاف • يمين/يسار تقديم • M تغيير الجودة',
                               style: const TextStyle(fontSize: 12, color: Colors.white54)),
                         ]))),
             ])));
