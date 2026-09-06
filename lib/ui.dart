@@ -182,14 +182,56 @@ class _HomePageState extends State<HomePage> {
   }
 
   @override
-  void dispose() {
-    Downloader.wifiBlocked.removeListener(_wifiToast);
-    Store.tick.removeListener(_tick);
-    _debounce?.cancel();
-    _scroll.dispose();
-    _search.dispose();
+void dispose() {
+    _savePosition();
+    if (widget.movie != null) {
+      final pos = Store.getPosition(widget.movie!.id);
+      final tot = StorageInfo.durSec(widget.movie!.duration);
+      final fin = tot > 0 && pos >= (tot * 0.95).toInt();
+      if (!fin && pos > 60) Notifier.resume(widget.movie!);
+      if (fin && Store.getBool('autoClean')) {
+        final d = Store.downloads()[widget.movie!.id];
+        if (d != null) {
+          Downloader.deleteFile((d['path'] ?? '').toString());
+          Store.delDownload(widget.movie!.id);
+        }
+      }
+    }
+    _posSaver?.cancel();
+    _sleep?.cancel();
+    VolumeController().removeListener();
+    WakelockPlus.disable();
+    WidgetsBinding.instance.removeObserver(this);
+    _hide?.cancel();
+    _posSub?.cancel();
+    _durSub?.cancel();
+    _playSub?.cancel();
+    _bufSub?.cancel();
+    _completedSub?.cancel();
+    _player.dispose();
+    
+    // ✅ الحل: إعادة تعيين الاتجاهات الأصلية + إجبار النظام على التطبيق فوراً
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.portraitDown,
+    ]).then((_) {
+      // حيلة صغيرة لإجبار Flutter على إعادة تقييم الاتجاه الحالي
+      SystemChrome.setPreferredOrientations([
+        DeviceOrientation.portraitUp,
+        DeviceOrientation.portraitDown,
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
+      ]).then((_) {
+        SystemChrome.setPreferredOrientations([
+          DeviceOrientation.portraitUp,
+          DeviceOrientation.portraitDown,
+        ]);
+      });
+    });
+    
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     super.dispose();
-  }
+}
 
   Future _loadSmart() async {
     final all = Smart.dedup(Store.all());
