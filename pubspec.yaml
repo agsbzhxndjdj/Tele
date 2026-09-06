@@ -24,6 +24,10 @@ dependencies:
   cloud_firestore: ^4.13.6
   flutter_inappwebview: ^6.1.5
   file_picker: ^8.1.4
+  # ✅ إضافة media_kit للأداء الفائق
+  media_kit: ^1.1.11
+  media_kit_video: ^1.2.5
+  media_kit_libs_video: ^1.0.5
 
 dev_dependencies:
   flutter_test:
