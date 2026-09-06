@@ -5,7 +5,7 @@ import 'package:hive_flutter/hive_flutter.dart';
 import 'package:media_kit/media_kit.dart';
 
 import 'core.dart';
-import 'ui.dart';
+import 'tv.dart';
 import 'lang.dart';
 import 'notify.dart';
 
@@ -15,10 +15,14 @@ Future<void> main() async {
   // ✅ تهيئة media_kit للأداء الفائق
   MediaKit.ensureInitialized();
 
+  // ✅ إجبار الوضع الأفقي
   await SystemChrome.setPreferredOrientations([
-    DeviceOrientation.portraitUp,
-    DeviceOrientation.portraitDown,
+    DeviceOrientation.landscapeLeft,
+    DeviceOrientation.landscapeRight,
   ]);
+
+  // ✅ وضع غامر (إخفاء الأشرطة)
+  await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
 
   await Hive.initFlutter();
   await Store.init();
@@ -30,23 +34,23 @@ Future<void> main() async {
 
   Lang.locale.value = Store.locale;
 
-  runApp(const MobileApp());
+  runApp(const TvApp());
 }
 
-class MobileApp extends StatefulWidget {
-  const MobileApp({super.key});
+class TvApp extends StatefulWidget {
+  const TvApp({super.key});
   @override
-  State<MobileApp> createState() => _MobileAppState();
+  State<TvApp> createState() => _TvAppState();
 }
 
-class _MobileAppState extends State<MobileApp> {
+class _TvAppState extends State<TvApp> {
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<String>(
       valueListenable: Lang.locale,
       builder: (_, locale, __) {
         return MaterialApp(
-          title: Lang.t('appName'),
+          title: 'تلي سينما TV',
           debugShowCheckedModeBanner: false,
           locale: Locale(locale),
           theme: ThemeData(
@@ -59,7 +63,7 @@ class _MobileAppState extends State<MobileApp> {
               surface: const Color(0xFF151B23),
             ),
           ),
-          home: const HomeShell(),
+          home: const TvHome(),
           builder: (context, child) {
             return Directionality(
               textDirection: TextDirection.rtl,
