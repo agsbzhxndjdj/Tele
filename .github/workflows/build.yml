@@ -26,7 +26,7 @@ jobs:
           channel: 'stable'
 
       - name: Generate android + web folders
-        run: flutter create . --platforms android,web --no-overwrite
+        run: flutter create . --platforms android,web --no-overwrite --project-name tele_cinema
 
       - name: Inject keystore + google-services
         run: |
