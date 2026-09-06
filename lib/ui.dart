@@ -1158,6 +1158,12 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
 
 Future<void> _initPlayer() async {
   try {
+    // ✅ حدد الرابط بناءً على الإعدادات
+    final videoUrl = widget.filePath ?? 
+        ((Store.getBool('dataSaver') && widget.movie != null && widget.movie!.alts.isNotEmpty)
+            ? (widget.movie!.alts.last['url'] ?? widget.url!)
+            : (widget.url!));
+    
     // ✅ بدون vo: 'gpu' - يعمل على كل الأجهزة
     _player = Player(
       configuration: PlayerConfiguration(
