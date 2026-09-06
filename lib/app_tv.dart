@@ -2,23 +2,23 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hive_flutter/hive_flutter.dart';
+import 'package:media_kit/media_kit.dart';
 
 import 'core.dart';
-import 'tv.dart';
+import 'ui.dart';
 import 'lang.dart';
 import 'notify.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  
+  // ✅ تهيئة media_kit للأداء الفائق
+  MediaKit.ensureInitialized();
 
-  // ✅ إجبار الوضع الأفقي
   await SystemChrome.setPreferredOrientations([
-    DeviceOrientation.landscapeLeft,
-    DeviceOrientation.landscapeRight,
+    DeviceOrientation.portraitUp,
+    DeviceOrientation.portraitDown,
   ]);
-
-  // ✅ وضع غامر (إخفاء الأشرطة)
-  await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
 
   await Hive.initFlutter();
   await Store.init();
@@ -30,23 +30,23 @@ Future<void> main() async {
 
   Lang.locale.value = Store.locale;
 
-  runApp(const TvApp());
+  runApp(const MobileApp());
 }
 
-class TvApp extends StatefulWidget {
-  const TvApp({super.key});
+class MobileApp extends StatefulWidget {
+  const MobileApp({super.key});
   @override
-  State<TvApp> createState() => _TvAppState();
+  State<MobileApp> createState() => _MobileAppState();
 }
 
-class _TvAppState extends State<TvApp> {
+class _MobileAppState extends State<MobileApp> {
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<String>(
       valueListenable: Lang.locale,
       builder: (_, locale, __) {
         return MaterialApp(
-          title: 'تلي سينما TV',
+          title: Lang.t('appName'),
           debugShowCheckedModeBanner: false,
           locale: Locale(locale),
           theme: ThemeData(
@@ -59,7 +59,7 @@ class _TvAppState extends State<TvApp> {
               surface: const Color(0xFF151B23),
             ),
           ),
-          home: const TvHome(),
+          home: const HomeShell(),
           builder: (context, child) {
             return Directionality(
               textDirection: TextDirection.rtl,
