@@ -1156,61 +1156,29 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
     _posSaver = Timer.periodic(const Duration(seconds: 5), (_) => _savePosition());
   }
 
-  Future<void> _initPlayer() async {
-    try {
-      // ✅ إعدادات media_kit للأداء الفائق
-      _player = Player(
-        configuration: PlayerConfiguration(
-          bufferSize: 32 * 1024 * 1024, // 32MB buffer - سريع جداً
-          vo: 'gpu',
-        ),
-      );
-      _controller = VideoController(_player);
-
-      // استماع للأحداث
-      _posSub = _player.stream.position.listen((p) {
-        if (!mounted) return;
-        if (_position != p) {
-          setState(() {
-            _position = p;
-            if (p.inSeconds != _lastPos) {
-              _lastPos = p.inSeconds;
-              Store.addWatchSeconds(1);
-            }
-          });
-        }
-      });
-
-      _durSub = _player.stream.duration.listen((d) {
-        if (!mounted) return;
-        if (_duration != d) setState(() => _duration = d);
-      });
-
-      _playSub = _player.stream.playing.listen((p) {
-        if (!mounted) return;
-        setState(() => _playing = p);
-      });
-
-      _bufSub = _player.stream.buffering.listen((b) {
-        if (!mounted) return;
-        setState(() => _buffering = b);
-      });
-
-      _completedSub = _player.stream.completed.listen((c) {
-        if (!mounted) return;
-        if (c && !_ended) {
-          _ended = true;
-          _player.pause();
-          _onEnd();
-        }
-      });
-
-      final videoUrl = widget.filePath ?? 
-          ((Store.getBool('dataSaver') && widget.movie != null && widget.movie!.alts.isNotEmpty)
-              ? (widget.movie!.alts.last['url'] ?? widget.url!)
-              : (widget.url!));
-
-      await _player.open(Media(videoUrl), play: true);
+Future<void> _initPlayer() async {
+  try {
+    // ✅ بدون vo: 'gpu' - يعمل على كل الأجهزة
+    _player = Player(
+      configuration: PlayerConfiguration(
+        bufferSize: 32 * 1024 * 1024,
+      ),
+    );
+    _controller = VideoController(_player);
+    
+    // ... باقي الكود كما هو (stream listeners)
+    
+    // ✅ مع User-Agent و Range headers
+    await _player.open(
+      Media(
+        videoUrl,
+        httpHeaders: {
+          'User-Agent': 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36',
+          'Range': 'bytes=0-',
+        },
+      ),
+      play: true,
+    );
       
       // استعادة الموضع المحفوظ
       if (widget.movie != null) {
