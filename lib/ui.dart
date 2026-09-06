@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:async';
 import 'dart:math';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -43,6 +44,49 @@ bool _inProgress(Movie m) {
   return pos > 60 && !_isFinished(m);
 }
 
+/* ======== ✅ الهوية الزجاجية الجديدة (Glassmorphism / iOS) ======== */
+class Glass extends StatelessWidget {
+  final Widget child;
+  final double radius;
+  final Color? tint;
+  final double blur;
+  final Color? borderColor;
+  final EdgeInsetsGeometry? padding;
+  final EdgeInsetsGeometry? margin;
+  const Glass({super.key, required this.child, this.radius = 20, this.tint, this.blur = 18, this.borderColor, this.padding, this.margin});
+  @override
+  Widget build(BuildContext context) => Container(
+        margin: margin,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(radius),
+          child: BackdropFilter(
+            filter: ui.ImageFilter.blur(sigmaX: blur, sigmaY: blur),
+            child: Container(
+              padding: padding,
+              decoration: BoxDecoration(
+                color: tint ?? Colors.white.withOpacity(0.07),
+                borderRadius: BorderRadius.circular(radius),
+                border: Border.all(color: borderColor ?? Colors.white.withOpacity(0.13)),
+              ),
+              child: child,
+            ),
+          ),
+        ),
+      );
+}
+
+class Orbs extends StatelessWidget {
+  const Orbs({super.key});
+  @override
+  Widget build(BuildContext context) => IgnorePointer(
+        child: Stack(children: [
+          Positioned(top: -60, right: -40, child: Container(width: 220, height: 220, decoration: BoxDecoration(shape: BoxShape.circle, gradient: RadialGradient(colors: [AppTheme.accent.withOpacity(0.35), Colors.transparent])))),
+          Positioned(top: 200, left: -70, child: Container(width: 260, height: 260, decoration: BoxDecoration(shape: BoxShape.circle, gradient: RadialGradient(colors: [Colors.teal.withOpacity(0.25), Colors.transparent])))),
+          Positioned(bottom: -80, right: 40, child: Container(width: 240, height: 240, decoration: BoxDecoration(shape: BoxShape.circle, gradient: RadialGradient(colors: [AppTheme.accent.withOpacity(0.22), Colors.transparent])))),
+        ]),
+      );
+}
+
 /* ======== الهيكل الرئيسي (5 تبويبات) ======== */
 class HomeShell extends StatelessWidget {
   const HomeShell({super.key});
@@ -50,19 +94,32 @@ class HomeShell extends StatelessWidget {
   Widget build(BuildContext context) => ValueListenableBuilder<int>(
         valueListenable: App.tab,
         builder: (ctx, tab, _) => Scaffold(
-          body: IndexedStack(index: tab, children: const [
-            HomePage(), FavoritesPage(), HistoryPage(), DownloadsPage(), ChannelsPage()
+          extendBody: true,
+          backgroundColor: const Color(0xFF0B0F14),
+          body: Stack(children: [
+            const Positioned.fill(child: Orbs()),
+            IndexedStack(index: tab, children: const [
+              HomePage(), FavoritesPage(), HistoryPage(), DownloadsPage(), ChannelsPage()
+            ]),
           ]),
-          bottomNavigationBar: NavigationBar(
-            selectedIndex: tab,
-            onDestinationSelected: (i) => App.tab.value = i,
-            destinations: [
-              NavigationDestination(icon: const Icon(Icons.movie_outlined), selectedIcon: const Icon(Icons.movie), label: Lang.t('movies')),
-              NavigationDestination(icon: const Icon(Icons.favorite_outline), selectedIcon: const Icon(Icons.favorite), label: Lang.t('favorites')),
-              NavigationDestination(icon: const Icon(Icons.history_outlined), selectedIcon: const Icon(Icons.history), label: Lang.t('watched')),
-              NavigationDestination(icon: const Icon(Icons.download_outlined), selectedIcon: const Icon(Icons.download), label: Lang.t('downloads')),
-              NavigationDestination(icon: const Icon(Icons.rss_feed_outlined), selectedIcon: const Icon(Icons.rss_feed), label: Lang.t('channels')),
-            ],
+          bottomNavigationBar: ClipRRect(
+            child: BackdropFilter(
+              filter: ui.ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+              child: NavigationBar(
+                elevation: 0,
+                backgroundColor: Colors.white.withOpacity(0.06),
+                indicatorColor: AppTheme.accent.withOpacity(0.30),
+                selectedIndex: tab,
+                onDestinationSelected: (i) => App.tab.value = i,
+                destinations: [
+                  NavigationDestination(icon: const Icon(Icons.movie_outlined), selectedIcon: const Icon(Icons.movie), label: Lang.t('movies')),
+                  NavigationDestination(icon: const Icon(Icons.favorite_outline), selectedIcon: const Icon(Icons.favorite), label: Lang.t('favorites')),
+                  NavigationDestination(icon: const Icon(Icons.history_outlined), selectedIcon: const Icon(Icons.history), label: Lang.t('watched')),
+                  NavigationDestination(icon: const Icon(Icons.download_outlined), selectedIcon: const Icon(Icons.download), label: Lang.t('downloads')),
+                  NavigationDestination(icon: const Icon(Icons.rss_feed_outlined), selectedIcon: const Icon(Icons.rss_feed), label: Lang.t('channels')),
+                ],
+              ),
+            ),
           ),
         ),
       );
@@ -174,7 +231,19 @@ class _HomePageState extends State<HomePage> {
     if (_fg.isNotEmpty) src = src.where((m) => m.genres.contains(_fg)).toList();
     src = src.where((m) => !Vault.hidden(m)).toList();
     src = Parts.group(src, on: Store.getBool('groupParts', true));
-    final s = Sorter.apply(Search.run(Filters.apply(src), _search.text), Store.sortMode);
+    List<Movie> s = Sorter.apply(Search.run(Filters.apply(src), _search.text), Store.sortMode);
+    /* ✅ الترتيب الجديد: الأكثر مشاهدة */
+    if (Store.sortMode == 'popular') {
+      final w = <String, int>{};
+      for (final h in Store.history()) {
+        w[h.id] = (w[h.id] ?? 0) + 1;
+      }
+      s = [...s]..sort((a, b) => (w[b.id] ?? 0).compareTo(w[a.id] ?? 0));
+    } else if (Store.sortMode == 'rating') {
+      /* ✅ الترتيب الجديد: الأعلى تقييماً */
+      final r = Store.ratings();
+      s = [...s]..sort((a, b) => ((r[b.id] ?? 0) as num).compareTo((r[a.id] ?? 0) as num));
+    }
     final pins = Store.pinned();
     _cachedBase = [...s.where((m) => pins.contains(m.id)), ...s.where((m) => !pins.contains(m.id))];
     _cachedTick = Store.tick.value;
@@ -212,63 +281,76 @@ class _HomePageState extends State<HomePage> {
     final listView = Store.getBool('listView');
 
     return Scaffold(
+      backgroundColor: Colors.transparent,
       appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        surfaceTintColor: Colors.transparent,
+        scrolledUnderElevation: 0,
         title: Text(Lang.t('appName')),
         actions: [
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(icon: const Icon(Icons.search), onPressed: () => setState(() => _searching = !_searching)),
-                IconButton(icon: const Icon(Icons.casino), onPressed: _random),
-                PopupMenuButton<String>(
-                  icon: const Icon(Icons.sort),
-                  onSelected: (v) async { await Store.setSortMode(v); _invalidateCache(); setState(() {}); },
-                  itemBuilder: (_) => [
-                    _sortItem('default', 'الأحدث أولاً'),
-                    _sortItem('az', 'أبجدي (ذكي)'),
-                    _sortItem('year_desc', 'السنة: الأحدث'),
-                    _sortItem('year_asc', 'السنة: الأقدم'),
-                    _sortItem('size_desc', 'الحجم: الأكبر'),
-                    _sortItem('size_asc', 'الحجم: الأصغر'),
-                    _sortItem('smart', '✨ ذكي (حسب ذوقك)'),
-                  ],
-                ),
-                IconButton(icon: const Icon(Icons.hub_outlined), tooltip: 'أدوات', onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const PowerHub()))),
-                PopupMenuButton<String>(
-                  icon: const Icon(Icons.more_vert),
-                  tooltip: 'المزيد',
-                  onSelected: (value) {
-                    switch (value) {
-                      case 'explore':
-                        Navigator.push(context, MaterialPageRoute(builder: (_) => const DiscoverScreen()));
-                        break;
-                      case 'achievements':
-                        Navigator.push(context, MaterialPageRoute(builder: (_) => const AchievementsScreen()));
-                        break;
-                      case 'series':
-                        final seriesOnly = groupMoviesSmart(Store.all()).where((mm) => SeriesRegistry.isSeries(mm.id)).toList();
-                        if (seriesOnly.isEmpty) {
-                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('لا توجد سلاسل حالياً')));
-                          return;
-                        }
-                        Navigator.push(context, MaterialPageRoute(builder: (_) => AllSeriesGrid(reps: seriesOnly)));
-                        break;
-                      case 'settings':
-                        Navigator.push(context, MaterialPageRoute(builder: (_) => const SettingsPage()));
-                        break;
-                    }
-                  },
-                  itemBuilder: (context) => [
-                    const PopupMenuItem(value: 'explore', child: Row(children: [Icon(Icons.explore_outlined), SizedBox(width: 12), Text('اكتشف')])),
-                    const PopupMenuItem(value: 'achievements', child: Row(children: [Icon(Icons.emoji_events_outlined), SizedBox(width: 12), Text('انجازاتي')])),
-                    const PopupMenuItem(value: 'series', child: Row(children: [Icon(Icons.movie_filter_outlined), SizedBox(width: 12), Text('السلاسل')])),
-                    const PopupMenuItem(value: 'settings', child: Row(children: [Icon(Icons.settings), SizedBox(width: 12), Text('الإعدادات')])),
-                  ],
-                ),
-                IconButton(icon: const Icon(Icons.refresh), onPressed: _refresh),
-              ],
+            child: Glass(
+              radius: 22,
+              blur: 14,
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+              margin: const EdgeInsets.only(left: 10, bottom: 4),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(icon: const Icon(Icons.search), onPressed: () => setState(() => _searching = !_searching)),
+                  IconButton(icon: const Icon(Icons.casino), onPressed: _random),
+                  PopupMenuButton<String>(
+                    icon: const Icon(Icons.sort),
+                    onSelected: (v) async { await Store.setSortMode(v); _invalidateCache(); setState(() {}); },
+                    itemBuilder: (_) => [
+                      _sortItem('default', 'الأحدث أولاً'),
+                      _sortItem('popular', '🔥 الأكثر مشاهدة'),
+                      _sortItem('rating', '⭐ الأعلى تقييماً'),
+                      _sortItem('az', 'أبجدي (ذكي)'),
+                      _sortItem('year_desc', 'السنة: الأحدث'),
+                      _sortItem('year_asc', 'السنة: الأقدم'),
+                      _sortItem('size_desc', 'الحجم: الأكبر'),
+                      _sortItem('size_asc', 'الحجم: الأصغر'),
+                      _sortItem('smart', '✨ ذكي (حسب ذوقك)'),
+                    ],
+                  ),
+                  IconButton(icon: const Icon(Icons.hub_outlined), tooltip: 'أدوات', onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const PowerHub()))),
+                  PopupMenuButton<String>(
+                    icon: const Icon(Icons.more_vert),
+                    tooltip: 'المزيد',
+                    onSelected: (value) {
+                      switch (value) {
+                        case 'explore':
+                          Navigator.push(context, MaterialPageRoute(builder: (_) => const DiscoverScreen()));
+                          break;
+                        case 'achievements':
+                          Navigator.push(context, MaterialPageRoute(builder: (_) => const AchievementsScreen()));
+                          break;
+                        case 'series':
+                          final seriesOnly = groupMoviesSmart(Store.all()).where((mm) => SeriesRegistry.isSeries(mm.id)).toList();
+                          if (seriesOnly.isEmpty) {
+                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('لا توجد سلاسل حالياً')));
+                            return;
+                          }
+                          Navigator.push(context, MaterialPageRoute(builder: (_) => AllSeriesGrid(reps: seriesOnly)));
+                          break;
+                        case 'settings':
+                          Navigator.push(context, MaterialPageRoute(builder: (_) => const SettingsPage()));
+                          break;
+                      }
+                    },
+                    itemBuilder: (context) => [
+                      const PopupMenuItem(value: 'explore', child: Row(children: [Icon(Icons.explore_outlined), SizedBox(width: 12), Text('اكتشف')])),
+                      const PopupMenuItem(value: 'achievements', child: Row(children: [Icon(Icons.emoji_events_outlined), SizedBox(width: 12), Text('انجازاتي')])),
+                      const PopupMenuItem(value: 'series', child: Row(children: [Icon(Icons.movie_filter_outlined), SizedBox(width: 12), Text('السلاسل')])),
+                      const PopupMenuItem(value: 'settings', child: Row(children: [Icon(Icons.settings), SizedBox(width: 12), Text('الإعدادات')])),
+                    ],
+                  ),
+                  IconButton(icon: const Icon(Icons.refresh), onPressed: _refresh),
+                ],
+              ),
             ),
           ),
         ],
@@ -277,29 +359,34 @@ class _HomePageState extends State<HomePage> {
                 preferredSize: const Size.fromHeight(56),
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
-                  child: TextField(
-                    controller: _search,
-                    onChanged: (_) { _invalidateCache(); setState(() {}); },
-                    decoration: InputDecoration(
-                      hintText: Lang.t('searchHint'),
-                      prefixIcon: const Icon(Icons.search),
-                      suffixIcon: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          VoiceBtn(onResult: (t) { _search.text = t; _invalidateCache(); setState(() {}); }),
-                          IconButton(
-                            icon: Icon(Icons.tune, color: Filters.active ? AppTheme.accent : Colors.grey),
-                            onPressed: () async {
-                              await showDialog(context: context, builder: (_) => const AdvancedFilterDialog());
-                              _invalidateCache();
-                              setState(() {});
-                            },
-                          ),
-                        ],
+                  child: Glass(
+                    radius: 28,
+                    blur: 16,
+                    padding: const EdgeInsets.symmetric(horizontal: 6),
+                    child: TextField(
+                      controller: _search,
+                      onChanged: (_) { _invalidateCache(); setState(() {}); },
+                      decoration: InputDecoration(
+                        hintText: Lang.t('searchHint'),
+                        prefixIcon: const Icon(Icons.search),
+                        suffixIcon: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            VoiceBtn(onResult: (t) { _search.text = t; _invalidateCache(); setState(() {}); }),
+                            IconButton(
+                              icon: Icon(Icons.tune, color: Filters.active ? AppTheme.accent : Colors.grey),
+                              onPressed: () async {
+                                await showDialog(context: context, builder: (_) => const AdvancedFilterDialog());
+                                _invalidateCache();
+                                setState(() {});
+                              },
+                            ),
+                          ],
+                        ),
+                        filled: true,
+                        fillColor: Colors.transparent,
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(28), borderSide: BorderSide.none),
                       ),
-                      filled: true,
-                      fillColor: const Color(0xFF151B23),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none),
                     ),
                   ),
                 ),
@@ -381,14 +468,14 @@ class _HomePageState extends State<HomePage> {
   Widget _banner(Movie m) => Padding(
         padding: const EdgeInsets.all(10),
         child: InkWell(
+          borderRadius: BorderRadius.circular(24),
           onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => MovieDetailsScreen(m: m))),
-          child: Container(
+          child: Glass(
+            radius: 24,
+            blur: 20,
+            tint: AppTheme.accent.withOpacity(0.10),
+            borderColor: AppTheme.accent.withOpacity(0.45),
             padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              gradient: LinearGradient(colors: [AppTheme.accent.withOpacity(0.35), Colors.transparent]),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: AppTheme.accent.withOpacity(0.5)),
-            ),
             child: Row(
               children: [
                 Icon(Icons.wb_sunny, color: AppTheme.accent),
@@ -466,7 +553,10 @@ class _HomePageState extends State<HomePage> {
           label: Text(t, style: const TextStyle(fontSize: 11)),
           selected: on,
           onSelected: (_) => f(),
-          selectedColor: AppTheme.accent.withOpacity(0.4),
+          backgroundColor: Colors.white.withOpacity(0.06),
+          selectedColor: AppTheme.accent.withOpacity(0.30),
+          side: BorderSide(color: on ? AppTheme.accent.withOpacity(0.6) : Colors.white.withOpacity(0.12)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         ),
       );
 }
@@ -486,11 +576,13 @@ class MovieCard extends StatelessWidget {
   }
 
   @override
-  Widget build(BuildContext context) => Card(
+  Widget build(BuildContext context) => Glass(
         key: ValueKey('card_${m.id}'),
-        clipBehavior: Clip.antiAlias,
+        radius: 18,
+        blur: 14,
         margin: const EdgeInsets.all(6),
         child: InkWell(
+          borderRadius: BorderRadius.circular(18),
           onTap: () => Navigator.push(
             context,
             MaterialPageRoute(builder: (_) => SeriesRegistry.isSeries(m.id) ? SeriesPartsScreen(m: m) : MovieDetailsScreen(m: m)),
@@ -526,7 +618,7 @@ class MovieCard extends StatelessWidget {
                     onTap: () => _cycle(context),
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(color: AppTheme.accent, borderRadius: BorderRadius.circular(6)),
+                      decoration: BoxDecoration(color: AppTheme.accent, borderRadius: BorderRadius.circular(10)),
                       child: Text(m.quality, style: const TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.black)),
                     ),
                   ),
@@ -539,7 +631,7 @@ class MovieCard extends StatelessWidget {
                     onTap: () => _cycle(context),
                     child: Container(
                       padding: const EdgeInsets.all(3),
-                      decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(6)),
+                      decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(10)),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
@@ -556,7 +648,7 @@ class MovieCard extends StatelessWidget {
                   left: 6,
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                    decoration: BoxDecoration(color: Colors.purple, borderRadius: BorderRadius.circular(6)),
+                    decoration: BoxDecoration(color: Colors.purple, borderRadius: BorderRadius.circular(10)),
                     child: Text('سلسلة ${SeriesRegistry.count(m.id)}', style: const TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.white)),
                   ),
                 ),
@@ -566,7 +658,7 @@ class MovieCard extends StatelessWidget {
                   right: 6,
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                    decoration: BoxDecoration(color: Colors.teal, borderRadius: BorderRadius.circular(6)),
+                    decoration: BoxDecoration(color: Colors.teal, borderRadius: BorderRadius.circular(10)),
                     child: Text('×${DupInfo.of(m)}', style: const TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.white)),
                   ),
                 ),
@@ -630,28 +722,33 @@ class MovieRowItem extends StatelessWidget {
   const MovieRowItem({super.key, required this.m});
 
   @override
-  Widget build(BuildContext context) => ListTile(
-        onTap: () => Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => SeriesRegistry.isSeries(m.id) ? SeriesPartsScreen(m: m) : MovieDetailsScreen(m: m)),
-        ),
-        leading: ClipRRect(
-          borderRadius: BorderRadius.circular(8),
-          child: m.poster.isNotEmpty
-              ? CachedNetworkImage(imageUrl: m.poster, width: 55, height: 80, fit: BoxFit.cover, errorWidget: (_, __, ___) => const Icon(Icons.movie))
-              : const Icon(Icons.movie),
-        ),
-        title: Text(m.title, style: const TextStyle(fontSize: 13)),
-        subtitle: Text([m.quality, m.duration, m.size].where((e) => e.isNotEmpty).join(' • '), style: const TextStyle(fontSize: 10)),
-        trailing: ValueListenableBuilder<int>(
-          valueListenable: Store.tick,
-          builder: (_, __, ___) => IconButton(
-            icon: Icon(
-              Store.isFav(m.id) ? Icons.favorite : Icons.favorite_border,
-              size: 20,
-              color: Store.isFav(m.id) ? Colors.red : Colors.grey,
+  Widget build(BuildContext context) => Glass(
+        radius: 16,
+        blur: 12,
+        margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        child: ListTile(
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => SeriesRegistry.isSeries(m.id) ? SeriesPartsScreen(m: m) : MovieDetailsScreen(m: m)),
+          ),
+          leading: ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: m.poster.isNotEmpty
+                ? CachedNetworkImage(imageUrl: m.poster, width: 55, height: 80, fit: BoxFit.cover, errorWidget: (_, __, ___) => const Icon(Icons.movie))
+                : const Icon(Icons.movie),
+          ),
+          title: Text(m.title, style: const TextStyle(fontSize: 13)),
+          subtitle: Text([m.quality, m.duration, m.size].where((e) => e.isNotEmpty).join(' • '), style: const TextStyle(fontSize: 10)),
+          trailing: ValueListenableBuilder<int>(
+            valueListenable: Store.tick,
+            builder: (_, __, ___) => IconButton(
+              icon: Icon(
+                Store.isFav(m.id) ? Icons.favorite : Icons.favorite_border,
+                size: 20,
+                color: Store.isFav(m.id) ? Colors.red : Colors.grey,
+              ),
+              onPressed: () => Store.toggleFav(m),
             ),
-            onPressed: () => Store.toggleFav(m),
           ),
         ),
       );
@@ -691,7 +788,7 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
 
   Widget _chip(String t) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-        decoration: BoxDecoration(color: const Color(0xFF1B2430), borderRadius: BorderRadius.circular(20)),
+        decoration: BoxDecoration(color: Colors.white.withOpacity(0.08), borderRadius: BorderRadius.circular(20), border: Border.all(color: Colors.white.withOpacity(0.12))),
         child: Text(t, style: TextStyle(fontSize: 11, color: AppTheme.accent)),
       );
 
@@ -758,6 +855,7 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
                 ],
               ),
             ),
+          const Positioned.fill(child: Orbs()),
           SafeArea(
             child: ListView(
               children: [
@@ -796,7 +894,11 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
                   ],
                 ),
                 const SizedBox(height: 8),
-                Container(
+                Glass(
+                  radius: 28,
+                  blur: 22,
+                  tint: const Color(0xFF0B0F14).withOpacity(0.55),
+                  margin: const EdgeInsets.fromLTRB(12, 4, 12, 12),
                   padding: const EdgeInsets.all(16),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
@@ -972,7 +1074,7 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
                                 backgroundColor: AppTheme.accent,
                                 foregroundColor: Colors.black,
                                 minimumSize: const Size.fromHeight(52),
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
                               ),
                             ),
                           ),
@@ -989,7 +1091,7 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
                                 minimumSize: const Size.fromHeight(52),
                                 foregroundColor: AppTheme.accent,
                                 side: BorderSide(color: AppTheme.accent),
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
                               ),
                             ),
                           ),
@@ -1400,9 +1502,11 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
           ),
           if (_gmode != 0)
             Center(
-              child: Container(
+              child: Glass(
+                radius: 20,
+                blur: 16,
+                tint: Colors.black.withOpacity(0.45),
                 padding: const EdgeInsets.all(18),
-                decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(16)),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -1435,11 +1539,13 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
               top: 0,
               left: 0,
               right: 0,
-              child: Container(
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Colors.black87, Colors.transparent]),
-                ),
-                child: SafeArea(
+              child: SafeArea(
+                child: Glass(
+                  radius: 24,
+                  blur: 20,
+                  tint: Colors.black.withOpacity(0.35),
+                  margin: const EdgeInsets.fromLTRB(10, 10, 10, 0),
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
                   child: Row(
                     children: [
                       IconButton(icon: const Icon(Icons.arrow_back, color: Colors.white), onPressed: () => Navigator.pop(context)),
@@ -1488,11 +1594,13 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
               bottom: 0,
               left: 0,
               right: 0,
-              child: Container(
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(begin: Alignment.bottomCenter, end: Alignment.topCenter, colors: [Colors.black87, Colors.transparent]),
-                ),
-                child: SafeArea(
+              child: SafeArea(
+                child: Glass(
+                  radius: 24,
+                  blur: 20,
+                  tint: Colors.black.withOpacity(0.35),
+                  margin: const EdgeInsets.fromLTRB(10, 0, 10, 10),
+                  padding: const EdgeInsets.fromLTRB(8, 6, 8, 10),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -1558,7 +1666,8 @@ class FavoritesPage extends StatelessWidget {
           final later = Store.watchLater();
           final pls = Store.playlists().keys.toList();
           return Scaffold(
-            appBar: AppBar(title: Text(Lang.t('favorites'))),
+            backgroundColor: Colors.transparent,
+            appBar: AppBar(backgroundColor: Colors.transparent, elevation: 0, surfaceTintColor: Colors.transparent, scrolledUnderElevation: 0, title: Text(Lang.t('favorites'))),
             body: ListView(
               children: [
                 if (later.isNotEmpty) _sec(Lang.t('watchLater'), later),
@@ -1571,6 +1680,9 @@ class FavoritesPage extends StatelessWidget {
                           .map(
                             (n) => ActionChip(
                               label: Text(n, style: const TextStyle(fontSize: 11)),
+                              side: BorderSide(color: Colors.white.withOpacity(0.12)),
+                              backgroundColor: Colors.white.withOpacity(0.06),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
                               onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => PlaylistPage(name: n))),
                             ),
                           )
@@ -1583,6 +1695,12 @@ class FavoritesPage extends StatelessWidget {
                     onPressed: () => newPlaylistDialog(context),
                     icon: const Icon(Icons.add),
                     label: Text(Lang.t('newPlaylist')),
+                    style: OutlinedButton.styleFrom(
+                      backgroundColor: Colors.white.withOpacity(0.06),
+                      foregroundColor: AppTheme.accent,
+                      side: BorderSide(color: AppTheme.accent.withOpacity(0.5)),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+                    ),
                   ),
                 ),
                 if (favs.isEmpty)
@@ -1625,11 +1743,13 @@ class FavoritesPage extends StatelessWidget {
             child: ListView.builder(
               scrollDirection: Axis.horizontal,
               itemCount: l.length,
-              itemBuilder: (_, i) => SizedBox(width: 130, child: MovieCard(m: l[i])),
+              itemBuilder: (_, i) => SizedBox(width: 130, child: MovieCard(m: list_i_safe(l, i))),
             ),
           ),
         ],
       );
+
+  Movie list_i_safe(List<Movie> l, int i) => l[i];
 }
 
 /* ======== صفحة قائمة مخصصة ======== */
@@ -1643,7 +1763,11 @@ class PlaylistPage extends StatelessWidget {
         builder: (_, __, ___) {
           final l = Store.playlistMovies(name);
           return Scaffold(
+            backgroundColor: const Color(0xFF0B0F14),
             appBar: AppBar(
+              backgroundColor: Colors.transparent,
+              elevation: 0,
+              surfaceTintColor: Colors.transparent,
               title: Text(name),
               actions: [
                 IconButton(
@@ -1655,14 +1779,19 @@ class PlaylistPage extends StatelessWidget {
                 ),
               ],
             ),
-            body: l.isEmpty
-                ? const Center(child: Icon(Icons.playlist_play, size: 80))
-                : GridView.builder(
-                    padding: const EdgeInsets.all(8),
-                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, childAspectRatio: 0.55),
-                    itemCount: l.length,
-                    itemBuilder: (_, i) => MovieCard(m: l[i]),
-                  ),
+            body: Stack(
+              children: [
+                const Positioned.fill(child: Orbs()),
+                l.isEmpty
+                    ? const Center(child: Icon(Icons.playlist_play, size: 80))
+                    : GridView.builder(
+                        padding: const EdgeInsets.all(8),
+                        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, childAspectRatio: 0.55),
+                        itemCount: l.length,
+                        itemBuilder: (_, i) => MovieCard(m: l[i]),
+                      ),
+              ],
+            ),
           );
         },
       );
@@ -1678,18 +1807,24 @@ class HistoryPage extends StatelessWidget {
         builder: (_, __, ___) {
           final h = Store.history();
           return Scaffold(
-            appBar: AppBar(title: Text(Lang.t('watched'))),
+            backgroundColor: Colors.transparent,
+            appBar: AppBar(backgroundColor: Colors.transparent, elevation: 0, surfaceTintColor: Colors.transparent, scrolledUnderElevation: 0, title: Text(Lang.t('watched'))),
             body: h.isEmpty
                 ? Center(child: Text(Lang.t('noHistory'), style: const TextStyle(color: Colors.grey)))
                 : ListView.separated(
                     itemCount: h.length,
-                    separatorBuilder: (_, __) => const Divider(height: 1),
-                    itemBuilder: (_, i) => ListTile(
-                      leading: const CircleAvatar(child: Icon(Icons.history, size: 20)),
-                      title: Text(h[i].title, style: const TextStyle(fontSize: 13)),
-                      subtitle: Text('@${h[i].channel}', style: const TextStyle(fontSize: 11)),
-                      onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => PlayerScreen(title: h[i].title, url: h[i].videoUrl, movie: h[i]))),
-                      trailing: IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20), onPressed: () => Store.markWatchedRemove(h[i].id)),
+                    separatorBuilder: (_, __) => const SizedBox(height: 4),
+                    itemBuilder: (_, i) => Glass(
+                      radius: 16,
+                      blur: 12,
+                      margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+                      child: ListTile(
+                        leading: const CircleAvatar(child: Icon(Icons.history, size: 20)),
+                        title: Text(h[i].title, style: const TextStyle(fontSize: 13)),
+                        subtitle: Text('@${h[i].channel}', style: const TextStyle(fontSize: 11)),
+                        onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => PlayerScreen(title: h[i].title, url: h[i].videoUrl, movie: h[i]))),
+                        trailing: IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20), onPressed: () => Store.markWatchedRemove(h[i].id)),
+                      ),
                     ),
                   ),
           );
@@ -1706,40 +1841,40 @@ class DownloadsPage extends StatelessWidget {
     if (m == null) return const SizedBox.shrink();
     final p = Downloader.progress.value[id] ?? 0;
     final paused = Downloader.isPaused(id);
-    return Card(
+    return Glass(
+      radius: 18,
+      blur: 14,
       margin: const EdgeInsets.fromLTRB(10, 8, 10, 0),
-      child: Padding(
-        padding: const EdgeInsets.all(10),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(paused ? Icons.pause_circle_outline : Icons.downloading, color: paused ? Colors.grey : AppTheme.accent, size: 22),
-                const SizedBox(width: 8),
-                Expanded(child: Text(m.title, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold), maxLines: 1, overflow: TextOverflow.ellipsis)),
-                Text('${(p * 100).round()}%', style: TextStyle(fontSize: 12, color: AppTheme.accent, fontWeight: FontWeight.bold)),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Directionality(
-              textDirection: TextDirection.ltr,
-              child: LinearProgressIndicator(value: p, minHeight: 5, backgroundColor: Colors.white12, valueColor: AlwaysStoppedAnimation(AppTheme.accent)),
-            ),
-            const SizedBox(height: 6),
-            Row(
-              children: [
-                Text(paused ? Lang.t('pausedDl') : Lang.t('downloading'), style: const TextStyle(fontSize: 10, color: Colors.grey)),
-                const Spacer(),
-                IconButton(
-                  icon: Icon(paused ? Icons.play_arrow : Icons.pause, size: 22, color: paused ? Colors.green : Colors.amber),
-                  onPressed: () => paused ? Downloader.resume(id) : Downloader.pause(id),
-                ),
-                IconButton(icon: const Icon(Icons.close, size: 22, color: Colors.red), onPressed: () => Downloader.cancel(id)),
-              ],
-            ),
-          ],
-        ),
+      padding: const EdgeInsets.all(10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(paused ? Icons.pause_circle_outline : Icons.downloading, color: paused ? Colors.grey : AppTheme.accent, size: 22),
+              const SizedBox(width: 8),
+              Expanded(child: Text(m.title, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold), maxLines: 1, overflow: TextOverflow.ellipsis)),
+              Text('${(p * 100).round()}%', style: TextStyle(fontSize: 12, color: AppTheme.accent, fontWeight: FontWeight.bold)),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Directionality(
+            textDirection: TextDirection.ltr,
+            child: LinearProgressIndicator(value: p, minHeight: 5, backgroundColor: Colors.white12, valueColor: AlwaysStoppedAnimation(AppTheme.accent)),
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Text(paused ? Lang.t('pausedDl') : Lang.t('downloading'), style: const TextStyle(fontSize: 10, color: Colors.grey)),
+              const Spacer(),
+              IconButton(
+                icon: Icon(paused ? Icons.play_arrow : Icons.pause, size: 22, color: paused ? Colors.green : Colors.amber),
+                onPressed: () => paused ? Downloader.resume(id) : Downloader.pause(id),
+              ),
+              IconButton(icon: const Icon(Icons.close, size: 22, color: Colors.red), onPressed: () => Downloader.cancel(id)),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -1755,7 +1890,8 @@ class DownloadsPage extends StatelessWidget {
                       final active = Downloader.activeIds();
                       final items = Store.downloads().entries.toList();
                       return Scaffold(
-                        appBar: AppBar(title: Text(Lang.t('downloads'))),
+                        backgroundColor: Colors.transparent,
+                        appBar: AppBar(backgroundColor: Colors.transparent, elevation: 0, surfaceTintColor: Colors.transparent, scrolledUnderElevation: 0, title: Text(Lang.t('downloads'))),
                         body: (active.isEmpty && items.isEmpty)
                             ? Center(child: Text(Lang.t('noDownloads'), style: const TextStyle(color: Colors.grey)))
                             : ListView(
@@ -1767,17 +1903,22 @@ class DownloadsPage extends StatelessWidget {
                                     (e) {
                                       final m = Movie.fromJson(Map<String, dynamic>.from(e.value));
                                       final path = e.value['path']?.toString() ?? '';
-                                      return ListTile(
-                                        leading: const CircleAvatar(child: Icon(Icons.download_done, size: 20)),
-                                        title: Text(m.title, style: const TextStyle(fontSize: 13)),
-                                        subtitle: Text(m.size.isEmpty ? path : m.size, style: const TextStyle(fontSize: 10)),
-                                        onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => PlayerScreen(title: m.title, filePath: path))),
-                                        trailing: IconButton(
-                                          icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20),
-                                          onPressed: () async {
-                                            await Downloader.deleteFile(path);
-                                            await Store.delDownload(e.key);
-                                          },
+                                      return Glass(
+                                        radius: 16,
+                                        blur: 12,
+                                        margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                                        child: ListTile(
+                                          leading: const CircleAvatar(child: Icon(Icons.download_done, size: 20)),
+                                          title: Text(m.title, style: const TextStyle(fontSize: 13)),
+                                          subtitle: Text(m.size.isEmpty ? path : m.size, style: const TextStyle(fontSize: 10)),
+                                          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => PlayerScreen(title: m.title, filePath: path))),
+                                          trailing: IconButton(
+                                            icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20),
+                                            onPressed: () async {
+                                              await Downloader.deleteFile(path);
+                                              await Store.delDownload(e.key);
+                                            },
+                                          ),
                                         ),
                                       );
                                     },
@@ -1829,22 +1970,28 @@ class _ChannelsPageState extends State<ChannelsPage> {
   Widget build(BuildContext context) => ValueListenableBuilder<int>(
         valueListenable: Store.tick,
         builder: (_, __, ___) => Scaffold(
-          appBar: AppBar(title: Text(Lang.t('channels'))),
+          backgroundColor: Colors.transparent,
+          appBar: AppBar(backgroundColor: Colors.transparent, elevation: 0, surfaceTintColor: Colors.transparent, scrolledUnderElevation: 0, title: Text(Lang.t('channels'))),
           body: ListView(
             padding: const EdgeInsets.all(12),
             children: [
-              TextField(
-                controller: _ctrl,
-                focusNode: _focus,
-                decoration: InputDecoration(
-                  hintText: Lang.t('addChannelHint'),
-                  prefixIcon: const Icon(Icons.add_link),
-                  suffixIcon: _busy
-                      ? const Padding(padding: EdgeInsets.all(12), child: CircularProgressIndicator(strokeWidth: 2))
-                      : IconButton(icon: Icon(Icons.add_circle, color: AppTheme.accent), onPressed: _add),
-                  filled: true,
-                  fillColor: const Color(0xFF151B23),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none),
+              Glass(
+                radius: 28,
+                blur: 16,
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+                child: TextField(
+                  controller: _ctrl,
+                  focusNode: _focus,
+                  decoration: InputDecoration(
+                    hintText: Lang.t('addChannelHint'),
+                    prefixIcon: const Icon(Icons.add_link),
+                    suffixIcon: _busy
+                        ? const Padding(padding: EdgeInsets.all(12), child: CircularProgressIndicator(strokeWidth: 2))
+                        : IconButton(icon: Icon(Icons.add_circle, color: AppTheme.accent), onPressed: _add),
+                    filled: true,
+                    fillColor: Colors.transparent,
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(28), borderSide: BorderSide.none),
+                  ),
                 ),
               ),
               const SizedBox(height: 16),
@@ -1858,6 +2005,12 @@ class _ChannelsPageState extends State<ChannelsPage> {
                       },
                       icon: const Icon(Icons.upload_file),
                       label: const Text('تصدير كل البيانات'),
+                      style: OutlinedButton.styleFrom(
+                        backgroundColor: Colors.white.withOpacity(0.06),
+                        foregroundColor: AppTheme.accent,
+                        side: BorderSide(color: AppTheme.accent.withOpacity(0.5)),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+                      ),
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -1869,6 +2022,12 @@ class _ChannelsPageState extends State<ChannelsPage> {
                       },
                       icon: const Icon(Icons.file_download),
                       label: const Text('استيراد'),
+                      style: OutlinedButton.styleFrom(
+                        backgroundColor: Colors.white.withOpacity(0.06),
+                        foregroundColor: AppTheme.accent,
+                        side: BorderSide(color: AppTheme.accent.withOpacity(0.5)),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+                      ),
                     ),
                   ),
                 ],
@@ -1899,36 +2058,46 @@ class _ChannelsPageState extends State<ChannelsPage> {
                     ],
                   ),
                 ),
-              ListTile(
-                dense: true,
-                leading: const CircleAvatar(child: Icon(Icons.video_library, size: 20)),
-                title: Text(Lang.t('allChannels'), style: const TextStyle(fontSize: 14)),
-                trailing: App.scope.value == 'all' ? Icon(Icons.check_circle, color: AppTheme.accent, size: 18) : null,
-                onTap: () {
-                  App.scope.value = 'all';
-                  App.tab.value = 0;
-                },
-              ),
-              const Divider(),
-              ...Store.channels().map(
-                (c) => ListTile(
-                  leading: CircleAvatar(
-                    backgroundImage: c.avatar != null ? NetworkImage(c.avatar!) : null,
-                    child: c.avatar == null ? const Icon(Icons.rss_feed, size: 18) : null,
-                  ),
-                  title: Text(c.title.isEmpty ? c.username : c.title, style: const TextStyle(fontSize: 14)),
-                  subtitle: Text('@${c.username} • ${Store.moviesOf(c.username).length}', style: const TextStyle(fontSize: 11)),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (App.scope.value == c.username) Icon(Icons.check_circle, color: AppTheme.accent, size: 18),
-                      IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20), onPressed: () => Store.delChannel(c.username)),
-                    ],
-                  ),
+              Glass(
+                radius: 16,
+                blur: 12,
+                margin: const EdgeInsets.symmetric(vertical: 4),
+                child: ListTile(
+                  dense: true,
+                  leading: const CircleAvatar(child: Icon(Icons.video_library, size: 20)),
+                  title: Text(Lang.t('allChannels'), style: const TextStyle(fontSize: 14)),
+                  trailing: App.scope.value == 'all' ? Icon(Icons.check_circle, color: AppTheme.accent, size: 18) : null,
                   onTap: () {
-                    App.scope.value = c.username;
+                    App.scope.value = 'all';
                     App.tab.value = 0;
                   },
+                ),
+              ),
+              const SizedBox(height: 6),
+              ...Store.channels().map(
+                (c) => Glass(
+                  radius: 18,
+                  blur: 12,
+                  margin: const EdgeInsets.symmetric(vertical: 5),
+                  child: ListTile(
+                    leading: CircleAvatar(
+                      backgroundImage: c.avatar != null ? NetworkImage(c.avatar!) : null,
+                      child: c.avatar == null ? const Icon(Icons.rss_feed, size: 18) : null,
+                    ),
+                    title: Text(c.title.isEmpty ? c.username : c.title, style: const TextStyle(fontSize: 14)),
+                    subtitle: Text('@${c.username} • ${Store.moviesOf(c.username).length}', style: const TextStyle(fontSize: 11)),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (App.scope.value == c.username) Icon(Icons.check_circle, color: AppTheme.accent, size: 18),
+                        IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20), onPressed: () => Store.delChannel(c.username)),
+                      ],
+                    ),
+                    onTap: () {
+                      App.scope.value = c.username;
+                      App.tab.value = 0;
+                    },
+                  ),
                 ),
               ),
             ],
@@ -1950,34 +2119,43 @@ class SeriesPartsScreen extends StatelessWidget {
     return Scaffold(
       backgroundColor: const Color(0xFF0B0F14),
       appBar: AppBar(
-        backgroundColor: const Color(0xFF0B0F14),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        surfaceTintColor: Colors.transparent,
         foregroundColor: Colors.white,
         title: Text('سلسلة ${seriesDisplayName(m)} (${parts.length} أجزاء)'),
       ),
-      body: ListView.builder(
-        padding: const EdgeInsets.all(12),
-        itemCount: parts.length,
-        itemBuilder: (_, i) {
-          final p = parts[i];
-          return Card(
-            color: const Color(0xFF1B2430),
-            margin: const EdgeInsets.only(bottom: 10),
-            child: ListTile(
-              leading: ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: p.poster.isNotEmpty
-                    ? CachedNetworkImage(imageUrl: p.poster, width: 55, height: 80, fit: BoxFit.cover, errorWidget: (_, __, ___) => const Icon(Icons.movie))
-                    : const Icon(Icons.movie),
-              ),
-              title: Text('الجزء ${i + 1}', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white)),
-              subtitle: Text(p.title.split('\n').first, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11, color: Colors.white70)),
-              trailing: p.quality.isNotEmpty
-                  ? Chip(label: Text(p.quality, style: const TextStyle(fontSize: 10)), backgroundColor: AppTheme.accent.withOpacity(0.2))
-                  : null,
-              onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => MovieDetailsScreen(m: p))),
-            ),
-          );
-        },
+      body: Stack(
+        children: [
+          const Positioned.fill(child: Orbs()),
+          ListView.builder(
+            padding: const EdgeInsets.all(12),
+            itemCount: parts.length,
+            itemBuilder: (_, i) {
+              final p = parts[i];
+              return Glass(
+                radius: 16,
+                blur: 12,
+                tint: const Color(0xFF1B2430).withOpacity(0.55),
+                margin: const EdgeInsets.only(bottom: 10),
+                child: ListTile(
+                  leading: ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: p.poster.isNotEmpty
+                        ? CachedNetworkImage(imageUrl: p.poster, width: 55, height: 80, fit: BoxFit.cover, errorWidget: (_, __, ___) => const Icon(Icons.movie))
+                        : const Icon(Icons.movie),
+                  ),
+                  title: Text('الجزء ${i + 1}', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white)),
+                  subtitle: Text(p.title.split('\n').first, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11, color: Colors.white70)),
+                  trailing: p.quality.isNotEmpty
+                      ? Chip(label: Text(p.quality, style: const TextStyle(fontSize: 10)), backgroundColor: AppTheme.accent.withOpacity(0.2))
+                      : null,
+                  onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => MovieDetailsScreen(m: p))),
+                ),
+              );
+            },
+          ),
+        ],
       ),
     );
   }
@@ -1990,55 +2168,62 @@ class AllSeriesGrid extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Scaffold(
         backgroundColor: const Color(0xFF0B0F14),
-        appBar: AppBar(backgroundColor: const Color(0xFF0B0F14), foregroundColor: Colors.white, title: const Text('كل السلاسل')),
-        body: GridView.builder(
-          padding: const EdgeInsets.all(10),
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, childAspectRatio: 0.55),
-          itemCount: reps.length,
-          itemBuilder: (_, i) {
-            final m = reps[i];
-            final n = SeriesRegistry.count(m.id);
-            return Card(
-              clipBehavior: Clip.antiAlias,
-              color: const Color(0xFF1B2430),
-              child: InkWell(
-                onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => SeriesPartsScreen(m: m))),
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    m.poster.isNotEmpty
-                        ? CachedNetworkImage(imageUrl: m.poster, fit: BoxFit.cover, errorWidget: (_, __, ___) => const Icon(Icons.movie_filter, size: 40))
-                        : const Icon(Icons.movie_filter, size: 40),
-                    Positioned(
-                      left: 0,
-                      right: 0,
-                      bottom: 0,
-                      child: Container(
-                        padding: const EdgeInsets.all(6),
-                        decoration: const BoxDecoration(gradient: LinearGradient(colors: [Colors.transparent, Colors.black87])),
-                        child: Text(
-                          seriesDisplayName(m),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white),
+        appBar: AppBar(backgroundColor: Colors.transparent, elevation: 0, surfaceTintColor: Colors.transparent, foregroundColor: Colors.white, title: const Text('كل السلاسل')),
+        body: Stack(
+          children: [
+            const Positioned.fill(child: Orbs()),
+            GridView.builder(
+              padding: const EdgeInsets.all(10),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, childAspectRatio: 0.55),
+              itemCount: reps.length,
+              itemBuilder: (_, i) {
+                final m = reps[i];
+                final n = SeriesRegistry.count(m.id);
+                return Glass(
+                  radius: 18,
+                  blur: 14,
+                  margin: const EdgeInsets.all(4),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(18),
+                    onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => SeriesPartsScreen(m: m))),
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        m.poster.isNotEmpty
+                            ? CachedNetworkImage(imageUrl: m.poster, fit: BoxFit.cover, errorWidget: (_, __, ___) => const Icon(Icons.movie_filter, size: 40))
+                            : const Icon(Icons.movie_filter, size: 40),
+                        Positioned(
+                          left: 0,
+                          right: 0,
+                          bottom: 0,
+                          child: Container(
+                            padding: const EdgeInsets.all(6),
+                            decoration: const BoxDecoration(gradient: LinearGradient(colors: [Colors.transparent, Colors.black87])),
+                            child: Text(
+                              seriesDisplayName(m),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white),
+                            ),
+                          ),
                         ),
-                      ),
+                        Positioned(
+                          top: 6,
+                          right: 6,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(color: Colors.purple, borderRadius: BorderRadius.circular(10)),
+                            child: Text('$n أجزاء', style: const TextStyle(fontSize: 9, color: Colors.white)),
+                          ),
+                        ),
+                      ],
                     ),
-                    Positioned(
-                      top: 6,
-                      right: 6,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(color: Colors.purple, borderRadius: BorderRadius.circular(6)),
-                        child: Text('$n أجزاء', style: const TextStyle(fontSize: 9, color: Colors.white)),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            );
-          },
+                  ),
+                );
+              },
+            ),
+          ],
         ),
       );
 }
