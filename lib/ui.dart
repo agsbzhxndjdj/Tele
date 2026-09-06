@@ -1048,7 +1048,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
   }
 
   Future _initSmart() async {
-    if (widget.movie != null) _autoUrl = await SpeedPick.bestUrl(widget.movie!);
+    // ✅ التعديل 1: ابدأ التشغيل فوراً بدون انتظار SpeedPick
     _init();
   }
 
@@ -1086,15 +1086,30 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
 
   Future _init() async {
     try {
+      final videoUrl = (Store.getBool('dataSaver') && widget.movie != null && widget.movie!.alts.isNotEmpty)
+          ? (widget.movie!.alts.last['url'] ?? (_autoUrl ?? widget.url!))
+          : (_autoUrl ?? widget.url!);
+      
+      // ✅ التعديل 2: إضافة VideoPlayerOptions لتقليل Buffer
       final c = widget.filePath != null
           ? VideoPlayerController.file(File(widget.filePath!))
           : VideoPlayerController.networkUrl(
-              Uri.parse(
-                (Store.getBool('dataSaver') && widget.movie != null && widget.movie!.alts.isNotEmpty)
-                    ? (widget.movie!.alts.last['url'] ?? (_autoUrl ?? widget.url!))
-                    : (_autoUrl ?? widget.url!),
+              Uri.parse(videoUrl),
+              videoPlayerOptions: VideoPlayerOptions(
+                mixWithOthers: false,
+                allowBackgroundPlayback: false,
               ),
-            );
+              httpHeaders: const {'Range': 'bytes=0-'},
+              formatHint: null,
+            )..setBufferOptions(
+                const BufferOptions(
+                  minBufferMs: 500,
+                  maxBufferMs: 10000,
+                  bufferForPlaybackMs: 250,
+                  bufferForPlaybackAfterRebufferMs: 1000,
+                ),
+              );
+      
       c.addListener(() {
         if (!mounted) return;
         setState(() {});
@@ -1250,7 +1265,24 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
       _ended = false;
     });
     try {
-      final c = VideoPlayerController.networkUrl(Uri.parse(url));
+      // ✅ التعديل 3: إضافة VideoPlayerOptions لتقليل Buffer
+      final c = VideoPlayerController.networkUrl(
+        Uri.parse(url),
+        videoPlayerOptions: VideoPlayerOptions(
+          mixWithOthers: false,
+          allowBackgroundPlayback: false,
+        ),
+        httpHeaders: const {'Range': 'bytes=0-'},
+        formatHint: null,
+      )..setBufferOptions(
+          const BufferOptions(
+            minBufferMs: 500,
+            maxBufferMs: 10000,
+            bufferForPlaybackMs: 250,
+            bufferForPlaybackAfterRebufferMs: 1000,
+          ),
+        );
+      
       c.addListener(() {
         if (!mounted) return;
         setState(() {});
