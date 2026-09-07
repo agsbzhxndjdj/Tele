@@ -181,57 +181,16 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  // ✅ الإصلاح 1: dispose الصحيحة الخاصة بالصفحة الرئيسية فقط
   @override
-void dispose() {
-    _savePosition();
-    if (widget.movie != null) {
-      final pos = Store.getPosition(widget.movie!.id);
-      final tot = StorageInfo.durSec(widget.movie!.duration);
-      final fin = tot > 0 && pos >= (tot * 0.95).toInt();
-      if (!fin && pos > 60) Notifier.resume(widget.movie!);
-      if (fin && Store.getBool('autoClean')) {
-        final d = Store.downloads()[widget.movie!.id];
-        if (d != null) {
-          Downloader.deleteFile((d['path'] ?? '').toString());
-          Store.delDownload(widget.movie!.id);
-        }
-      }
-    }
-    _posSaver?.cancel();
-    _sleep?.cancel();
-    VolumeController().removeListener();
-    WakelockPlus.disable();
-    WidgetsBinding.instance.removeObserver(this);
-    _hide?.cancel();
-    _posSub?.cancel();
-    _durSub?.cancel();
-    _playSub?.cancel();
-    _bufSub?.cancel();
-    _completedSub?.cancel();
-    _player.dispose();
-    
-    // ✅ الحل: إعادة تعيين الاتجاهات الأصلية + إجبار النظام على التطبيق فوراً
-    SystemChrome.setPreferredOrientations([
-      DeviceOrientation.portraitUp,
-      DeviceOrientation.portraitDown,
-    ]).then((_) {
-      // حيلة صغيرة لإجبار Flutter على إعادة تقييم الاتجاه الحالي
-      SystemChrome.setPreferredOrientations([
-        DeviceOrientation.portraitUp,
-        DeviceOrientation.portraitDown,
-        DeviceOrientation.landscapeLeft,
-        DeviceOrientation.landscapeRight,
-      ]).then((_) {
-        SystemChrome.setPreferredOrientations([
-          DeviceOrientation.portraitUp,
-          DeviceOrientation.portraitDown,
-        ]);
-      });
-    });
-    
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+  void dispose() {
+    Downloader.wifiBlocked.removeListener(_wifiToast);
+    Store.tick.removeListener(_tick);
+    _debounce?.cancel();
+    _scroll.dispose();
+    _search.dispose();
     super.dispose();
-}
+  }
 
   Future _loadSmart() async {
     final all = Smart.dedup(Store.all());
@@ -372,10 +331,10 @@ void dispose() {
                           break;
                         case 'series':
                           final seriesOnly = groupMoviesSmart(Store.all()).where((mm) => SeriesRegistry.isSeries(mm.id)).toList();
-                          if (seriesOnly.isEmpty) {
-                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('لا توجد سلاسل حالياً')));
-                            return;
-                          }
+                        if (seriesOnly.isEmpty) {
+                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('لا توجد سلاسل حالياً')));
+                          return;
+                        }
                           Navigator.push(context, MaterialPageRoute(builder: (_) => AllSeriesGrid(reps: seriesOnly)));
                           break;
                         case 'settings':
@@ -1173,6 +1132,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
   Offset? _start;
   int _gmode = 0, _lastPos = 0;
   String _glabel = '';
+  String _errMsg = '';
   double _vol = 1.0, _bright = 1.0;
   int _seekBase = 0, _seekDelta = 0;
   Duration _duration = Duration.zero;
@@ -1198,27 +1158,63 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
     _posSaver = Timer.periodic(const Duration(seconds: 5), (_) => _savePosition());
   }
 
-Future<void> _initPlayer() async {
-  try {
-    // ✅ حدد الرابط بناءً على الإعدادات
-    final videoUrl = widget.filePath ?? 
-        ((Store.getBool('dataSaver') && widget.movie != null && widget.movie!.alts.isNotEmpty)
-            ? (widget.movie!.alts.last['url'] ?? widget.url!)
-            : (widget.url!));
-    
-    // ✅ بدون vo: 'gpu' - يعمل على كل الأجهزة
-    _player = Player(
-      configuration: PlayerConfiguration(
-        bufferSize: 32 * 1024 * 1024,
-      ),
-    );
-    _controller = VideoController(_player);
-    
-    // ... باقي الكود كما هو (stream listeners)
-    
-    // ✅ مع User-Agent و Range headers
-    await _player.open(Media(videoUrl), play: true);
-      
+  Future<void> _initPlayer() async {
+    try {
+      // ✅ حدد الرابط بناءً على الإعدادات
+      final videoUrl = widget.filePath ??
+          ((Store.getBool('dataSaver') && widget.movie != null && widget.movie!.alts.isNotEmpty)
+              ? (widget.movie!.alts.last['url'] ?? widget.url!)
+              : (widget.url!));
+
+      // ✅ بدون vo: 'gpu' - يعمل على كل الأجهزة
+      _player = Player(
+        configuration: PlayerConfiguration(
+          bufferSize: 32 * 1024 * 1024,
+        ),
+      );
+      _controller = VideoController(_player);
+
+      // ✅ الإصلاح 3: stream listeners (بدونها المشغل لا يعمل: الموضع/المدة/التحميل/الانتهاء)
+      _posSub = _player.stream.position.listen((p) {
+        if (!mounted) return;
+        if (_position != p) {
+          setState(() {
+            _position = p;
+            if (p.inSeconds != _lastPos) {
+              _lastPos = p.inSeconds;
+              Store.addWatchSeconds(1);
+            }
+          });
+        }
+      });
+
+      _durSub = _player.stream.duration.listen((d) {
+        if (!mounted) return;
+        if (_duration != d) setState(() => _duration = d);
+      });
+
+      _playSub = _player.stream.playing.listen((p) {
+        if (!mounted) return;
+        setState(() => _playing = p);
+      });
+
+      _bufSub = _player.stream.buffering.listen((b) {
+        if (!mounted) return;
+        setState(() => _buffering = b);
+      });
+
+      _completedSub = _player.stream.completed.listen((c) {
+        if (!mounted) return;
+        if (c && !_ended) {
+          _ended = true;
+          _player.pause();
+          _onEnd();
+        }
+      });
+
+      // ✅ بدون httpHeaders - mpv يدير طلبات Range بنفسه
+      await _player.open(Media(videoUrl), play: true);
+
       // استعادة الموضع المحفوظ
       if (widget.movie != null) {
         final savedPos = Store.getPosition(widget.movie!.id);
@@ -1229,11 +1225,11 @@ Future<void> _initPlayer() async {
 
       if (!mounted) return;
       setState(() => _ready = true);
-      
+
       final sv = await VolumeController().getVolume();
       if (mounted && sv != null) setState(() => _vol = sv);
     } catch (e) {
-      if (mounted) setState(() => _err = true);
+      if (mounted) setState(() { _err = true; _errMsg = e.toString(); });
     }
   }
 
@@ -1425,7 +1421,23 @@ Future<void> _initPlayer() async {
     _bufSub?.cancel();
     _completedSub?.cancel();
     _player.dispose();
-    SystemChrome.setPreferredOrientations(DeviceOrientation.values);
+    // ✅ الإصلاح 2: كود إعادة الاتجاه العمودي مكانه الصحيح هنا (في dispose المشغل)
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.portraitDown,
+    ]).then((_) {
+      SystemChrome.setPreferredOrientations([
+        DeviceOrientation.portraitUp,
+        DeviceOrientation.portraitDown,
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
+      ]).then((_) {
+        SystemChrome.setPreferredOrientations([
+          DeviceOrientation.portraitUp,
+          DeviceOrientation.portraitDown,
+        ]);
+      });
+    });
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     super.dispose();
   }
@@ -1539,7 +1551,14 @@ Future<void> _initPlayer() async {
               ),
             ),
           if (_ready && _buffering) const Center(child: CircularProgressIndicator(color: Colors.amber)),
-          if (_err) Center(child: Text(Lang.t('failedPlay'), style: const TextStyle(color: Colors.grey))),
+          // ✅ الإصلاح 4: عرض السبب الحقيقي للفشل (للتشخيص)
+          if (_err)
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Text('${Lang.t('failedPlay')}\n$_errMsg', textAlign: TextAlign.center, style: const TextStyle(color: Colors.grey, fontSize: 12)),
+              ),
+            ),
           if (!_ready && !_err) const Center(child: CircularProgressIndicator(color: Colors.amber)),
           if (_ui)
             Positioned(
