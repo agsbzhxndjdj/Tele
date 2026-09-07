@@ -1160,6 +1160,8 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
 
   Future<void> _initPlayer() async {
     try {
+      MediaKit.ensureInitialized();   // ✅ حماية: تهيئة قبل أي استخدام
+      
       // ✅ حدد الرابط بناءً على الإعدادات
       final videoUrl = widget.filePath ??
           ((Store.getBool('dataSaver') && widget.movie != null && widget.movie!.alts.isNotEmpty)
