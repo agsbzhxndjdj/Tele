@@ -992,9 +992,29 @@ class ShareCard {
       final b = _bk.currentContext!.findRenderObject() as RenderRepaintBoundary;
       final img = await b.toImage(pixelRatio: 3);
       final bytes = await img.toByteData(format: ui.ImageByteFormat.png);
+      final data = bytes!.buffer.asUint8List();
+      final name = 'card_${DateTime.now().millisecondsSinceEpoch}.png';
+
+      // ✅ أولاً: احفظ في المجلد العام TeleCinema/Cards عبر Kotlin
+      bool ok = false;
+      try {
+        const ch = MethodChannel('tele_cinema/device');
+        ok = await ch.invokeMethod('saveBytes', {'name': name, 'bytes': data, 'sub': 'Cards'}) == true;
+      } catch (_) {
+        ok = false;
+      }
+
+      if (ok) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('حُفظت البطاقة في مجلد TeleCinema/Cards ✅')));
+        }
+        return;
+      }
+
+      // ✅ احتياطي: إذا فشل المجلد العام، احفظ داخل التطبيق
       final dir = await getExternalStorageDirectory();
-      final f = File('${dir!.path}/card_${DateTime.now().millisecondsSinceEpoch}.png');
-      await f.writeAsBytes(bytes!.buffer.asUint8List());
+      final f = File('${dir!.path}/$name');
+      await f.writeAsBytes(data);
       if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('حُفظت: ${f.path}')));
     } catch (_) {}
   }
