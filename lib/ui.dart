@@ -895,6 +895,24 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
                   ],
                 ),
                 const SizedBox(height: 8),
+                // ✅ إضافة بوستر مصغر قابل للتكبير
+                if (m.poster.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                    child: GestureDetector(
+                      onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => PosterScreen(m: m))),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(20),
+                        child: CachedNetworkImage(
+                          imageUrl: m.poster,
+                          height: 280,
+                          width: double.infinity,
+                          fit: BoxFit.cover,
+                          errorWidget: (_, __, ___) => const SizedBox.shrink(),
+                        ),
+                      ),
+                    ),
+                  ),
                 Glass(
                   radius: 28,
                   blur: 22,
@@ -1160,15 +1178,13 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
 
   Future<void> _initPlayer() async {
     try {
-      MediaKit.ensureInitialized();   // ✅ حماية: تهيئة قبل أي استخدام
+      MediaKit.ensureInitialized();
       
-      // ✅ حدد الرابط بناءً على الإعدادات
       final videoUrl = widget.filePath ??
           ((Store.getBool('dataSaver') && widget.movie != null && widget.movie!.alts.isNotEmpty)
               ? (widget.movie!.alts.last['url'] ?? widget.url!)
               : (widget.url!));
 
-      // ✅ بدون vo: 'gpu' - يعمل على كل الأجهزة
       _player = Player(
         configuration: PlayerConfiguration(
           bufferSize: 32 * 1024 * 1024,
@@ -1176,7 +1192,6 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
       );
       _controller = VideoController(_player);
 
-      // ✅ الإصلاح 3: stream listeners (بدونها المشغل لا يعمل: الموضع/المدة/التحميل/الانتهاء)
       _posSub = _player.stream.position.listen((p) {
         if (!mounted) return;
         if (_position != p) {
@@ -1205,19 +1220,18 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
         setState(() => _buffering = b);
       });
 
+      // ✅ الإصلاح: يظهر زر الجزء التالي فقط عند النهاية الحقيقية
       _completedSub = _player.stream.completed.listen((c) {
         if (!mounted) return;
-        if (c && !_ended) {
+        if (c && !_ended && _duration.inSeconds > 0 && _position.inSeconds >= _duration.inSeconds - 5) {
           _ended = true;
           _player.pause();
           _onEnd();
         }
       });
 
-      // ✅ بدون httpHeaders - mpv يدير طلبات Range بنفسه
       await _player.open(Media(videoUrl), play: true);
 
-      // استعادة الموضع المحفوظ
       if (widget.movie != null) {
         final savedPos = Store.getPosition(widget.movie!.id);
         if (savedPos > 0) {
@@ -1257,13 +1271,13 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
     }
   }
 
+  // ✅ الإصلاح: حفظ الموضع حتى لو تأخر معرفة المدة
   Future _savePosition() async {
-    if (widget.movie != null && _position.inSeconds > 10) {
-      final dur = _duration.inSeconds;
-      final pos = _position.inSeconds;
-      if (dur > 0 && pos < dur - 10) {
-        await Store.savePosition(widget.movie!.id, pos);
-      }
+    if (widget.movie == null) return;
+    final pos = _position.inSeconds;
+    final dur = _duration.inSeconds;
+    if (pos > 10 && (dur == 0 || pos < dur - 10)) {
+      await Store.savePosition(widget.movie!.id, pos);
     }
   }
 
@@ -1423,7 +1437,6 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
     _bufSub?.cancel();
     _completedSub?.cancel();
     _player.dispose();
-    // ✅ الإصلاح 2: كود إعادة الاتجاه العمودي مكانه الصحيح هنا (في dispose المشغل)
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.portraitUp,
       DeviceOrientation.portraitDown,
@@ -1553,7 +1566,6 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
               ),
             ),
           if (_ready && _buffering) const Center(child: CircularProgressIndicator(color: Colors.amber)),
-          // ✅ الإصلاح 4: عرض السبب الحقيقي للفشل (للتشخيص)
           if (_err)
             Center(
               child: Padding(
